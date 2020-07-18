@@ -1,12 +1,10 @@
 ---- MODULE backpressure ----
 
-\* pcal backpressure.tla && TLA_JAVA=/usr/lib/jvm/java-14-openjdk/bin/java tlc backpressure.tla -workers 8
-
 \* Note: Each while iteration is an atomic step.
 
 EXTENDS TLC, Integers, FiniteSets
 
-Cowns == 1..3
+Cowns == 1..4
 
 Subsets(s, min, max) ==
   {cs \in SUBSET s : Cardinality(cs) >= min /\ Cardinality(cs) <= max}
@@ -99,7 +97,7 @@ end process;
 end algorithm; *)
 
 \* BEGIN TRANSLATION - the hash of the PCal code: PCal-9aaefd9f6bfbac1619db41fed353a4d7
-\* Process variable next of process behaviour at line 34 col 38 changed to next_
+\* Process variable next of process behaviour at line 32 col 38 changed to next_
 CONSTANT defaultInitValue
 VARIABLES available, overloaded, muted, unmutable, mute_map, refcount, 
           rc_barrier, pc
@@ -172,7 +170,7 @@ Acquire(self) == /\ pc[self] = "Acquire"
 
 Action(self) == /\ pc[self] = "Action"
                 /\ Assert(required[self] = {}, 
-                          "Failure of assertion at line 58, column 3.")
+                          "Failure of assertion at line 56, column 3.")
                 /\ \E overloading \in Subsets(acquired[self] \ muted, 0, 3):
                      overloaded' = (overloaded \union overloading)
                 /\ IF (overloaded' /= {}) /\ (acquired[self] \cap overloaded' = {})
@@ -199,7 +197,7 @@ Complete(self) == /\ pc[self] = "Complete"
                   /\ refcount' = [c \in Cowns |-> IF c \in acquired[self] THEN refcount[c] - 1 ELSE refcount[c]]
                   /\ acquired' = [acquired EXCEPT ![self] = {}]
                   /\ Assert(acquired'[self] \union required[self] = {}, 
-                            "Failure of assertion at line 80, column 3.")
+                            "Failure of assertion at line 78, column 3.")
                   /\ pc' = [pc EXCEPT ![self] = "Done"]
                   /\ UNCHANGED << overloaded, unmutable, rc_barrier, required, 
                                   next_, mutor, next >>
@@ -248,7 +246,7 @@ Spec == /\ Init /\ [][Next]_vars
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
-\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-38e171aa30fc7d0b6ca0189b157853a0
+\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-64c1ea2a00c06bb04c44c3cca8bb2c0a
 
 MutedInv == available \intersect muted = {}
 UnmutableInv == (overloaded \union unmutable) \cap muted = {}
