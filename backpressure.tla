@@ -6,16 +6,13 @@ Assumptions:
   - Cowns cannot become overloaded while muted.
   - Mute map entries will eventually be removed and unmuted.
     - Modeled by having overloaded cowns eventually become not overloaded.
-
-Note:
-  - Each while iteration is an atomic step.
 *)
 
 EXTENDS TLC, Integers, FiniteSets
 
 CONSTANT null
-Cowns == 1..2
-Behaviours == 1..4
+Cowns == 1..3
+Behaviours == 1..3
 
 Range(f) == {f[x] : x \in DOMAIN f}
 Min(s) == CHOOSE x \in s: \A y \in s \ {x}: y > x
@@ -35,8 +32,8 @@ variables
   rc_barrier = 0;
 
 define
-  MutedInv == (available \union overloaded) \intersect muted = {}
-  UnmutableInv == unmutable \intersect muted = {}
+  MutedInv == ~Intersection(available \union overloaded, muted)
+  UnmutableInv == ~Intersection(unmutable, muted)
   RefcountInv == \A c \in Cowns : refcount[c] >= 0
   MuteMapInv == \A m \in muted : m \in UNION Range(mute_map)
   TypeInvariant == MutedInv /\ RefcountInv /\ MuteMapInv
@@ -86,7 +83,7 @@ Acquire:
   end if;
 
 Action:
-  assert acquired \intersect muted = {};
+  assert ~Intersection(acquired, muted);
   if overloaded /= {} /\ ~Intersection(acquired, overloaded) then
     either
       with mutor_ \in overloaded do mutor := mutor_ end with;
@@ -122,13 +119,13 @@ end process;
 
 end algorithm; *)
 
-\* BEGIN TRANSLATION - the hash of the PCal code: PCal-7bbb0170534f937a32b4589eedd3e7ec
-VARIABLES available, overloaded, muted, unmutable, mute_map, refcount, 
+\* BEGIN TRANSLATION - the hash of the PCal code: PCal-413f9a2cd5ba6c79e3d0ce864121dee9
+VARIABLES available, overloaded, muted, unmutable, mute_map, refcount,
           rc_barrier, pc
 
 (* define statement *)
-MutedInv == (available \union overloaded) \intersect muted = {}
-UnmutableInv == unmutable \intersect muted = {}
+MutedInv == ~Intersection(available \union overloaded, muted)
+UnmutableInv == ~Intersection(unmutable, muted)
 RefcountInv == \A c \in Cowns : refcount[c] >= 0
 MuteMapInv == \A m \in muted : m \in UNION Range(mute_map)
 TypeInvariant == MutedInv /\ RefcountInv /\ MuteMapInv
@@ -144,8 +141,8 @@ TriggersUnmute(mutor) == mutor \notin overloaded \/ refcount[mutor] = 0
 
 VARIABLES required, acquired, next, muting, mutor, unmute_set
 
-vars == << available, overloaded, muted, unmutable, mute_map, refcount, 
-           rc_barrier, pc, required, acquired, next, muting, mutor, 
+vars == << available, overloaded, muted, unmutable, mute_map, refcount,
+           rc_barrier, pc, required, acquired, next, muting, mutor,
            unmute_set >>
 
 ProcSet == (Behaviours)
@@ -173,15 +170,15 @@ Create(self) == /\ pc[self] = "Create"
                 /\ IF required[self] = {}
                       THEN /\ pc' = [pc EXCEPT ![self] = "Done"]
                       ELSE /\ pc' = [pc EXCEPT ![self] = "RCBarrier"]
-                /\ UNCHANGED << available, overloaded, muted, unmutable, 
-                                mute_map, required, acquired, next, muting, 
+                /\ UNCHANGED << available, overloaded, muted, unmutable,
+                                mute_map, required, acquired, next, muting,
                                 mutor, unmute_set >>
 
 RCBarrier(self) == /\ pc[self] = "RCBarrier"
                    /\ rc_barrier = Cardinality(Behaviours)
                    /\ pc' = [pc EXCEPT ![self] = "Acquire"]
-                   /\ UNCHANGED << available, overloaded, muted, unmutable, 
-                                   mute_map, refcount, rc_barrier, required, 
+                   /\ UNCHANGED << available, overloaded, muted, unmutable,
+                                   mute_map, refcount, rc_barrier, required,
                                    acquired, next, muting, mutor, unmute_set >>
 
 Acquire(self) == /\ pc[self] = "Acquire"
@@ -199,12 +196,12 @@ Acquire(self) == /\ pc[self] = "Acquire"
                  /\ IF required'[self] /= {}
                        THEN /\ pc' = [pc EXCEPT ![self] = "Acquire"]
                        ELSE /\ pc' = [pc EXCEPT ![self] = "Action"]
-                 /\ UNCHANGED << overloaded, mute_map, refcount, rc_barrier, 
+                 /\ UNCHANGED << overloaded, mute_map, refcount, rc_barrier,
                                  muting, mutor, unmute_set >>
 
 Action(self) == /\ pc[self] = "Action"
-                /\ Assert(acquired[self] \intersect muted = {}, 
-                          "Failure of assertion at line 89, column 3.")
+                /\ Assert(~Intersection(acquired[self], muted),
+                          "Failure of assertion at line 86, column 3.")
                 /\ IF overloaded /= {} /\ ~Intersection(acquired[self], overloaded)
                       THEN /\ \/ /\ \E mutor_ \in overloaded:
                                       mutor' = [mutor EXCEPT ![self] = mutor_]
@@ -214,8 +211,8 @@ Action(self) == /\ pc[self] = "Action"
                       ELSE /\ TRUE
                            /\ UNCHANGED << muting, mutor >>
                 /\ pc' = [pc EXCEPT ![self] = "Complete"]
-                /\ UNCHANGED << available, overloaded, muted, unmutable, 
-                                mute_map, refcount, rc_barrier, required, 
+                /\ UNCHANGED << available, overloaded, muted, unmutable,
+                                mute_map, refcount, rc_barrier, required,
                                 acquired, next, unmute_set >>
 
 Complete(self) == /\ pc[self] = "Complete"
@@ -230,7 +227,7 @@ Complete(self) == /\ pc[self] = "Complete"
                   /\ available' = (available \union (acquired[self] \ muting[self]))
                   /\ refcount' = DecRef(acquired[self])
                   /\ pc' = [pc EXCEPT ![self] = "MuteMapScan"]
-                  /\ UNCHANGED << unmutable, rc_barrier, required, acquired, 
+                  /\ UNCHANGED << unmutable, rc_barrier, required, acquired,
                                   next, muting, mutor, unmute_set >>
 
 MuteMapScan(self) == /\ pc[self] = "MuteMapScan"
@@ -239,8 +236,8 @@ MuteMapScan(self) == /\ pc[self] = "MuteMapScan"
                      /\ muted' = muted \ unmute_set'[self]
                      /\ available' = (available \union unmute_set'[self])
                      /\ pc' = [pc EXCEPT ![self] = "Done"]
-                     /\ UNCHANGED << overloaded, unmutable, refcount, 
-                                     rc_barrier, required, acquired, next, 
+                     /\ UNCHANGED << overloaded, unmutable, refcount,
+                                     rc_barrier, required, acquired, next,
                                      muting, mutor >>
 
 behaviour(self) == Create(self) \/ RCBarrier(self) \/ Acquire(self)
@@ -259,6 +256,6 @@ Spec == /\ Init /\ [][Next]_vars
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
-\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-ff0e302996391a1345af29c4de369f29
+\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-4e1b3ad6883ec6c55316cb09f72438f0
 
 ====
