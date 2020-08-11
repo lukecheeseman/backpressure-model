@@ -59,9 +59,6 @@ Create:
   \* Empty required set used to represent fewer behaviours in the system.
   if required = {} then goto Done; end if;
 
-RCBarrier:
-  await rc_barrier = Cardinality(Behaviours);
-
 Acquire:
   with next = Min(required) do
     if Intersection(overloaded, acquired \union required) then
@@ -110,6 +107,8 @@ Complete:
   refcount := DecRef(acquired);
 
 MuteMapScan:
+  await rc_barrier = Cardinality(Behaviours);
+
   with unmuting = UNION Range([c \in {k \in Cowns : TriggersUnmute(k)} |-> mute_map[c]]) do
     mute_map := [c \in Cowns |-> IF TriggersUnmute(c) THEN {} ELSE mute_map[c]];
     muted := muted \ unmuting;
@@ -119,7 +118,7 @@ end process;
 
 end algorithm; *)
 
-\* BEGIN TRANSLATION - the hash of the PCal code: PCal-744f73e58e4d94da2c7898754973aca2
+\* BEGIN TRANSLATION - the hash of the PCal code: PCal-e24769338b2b389a4c531bac67f11afb
 VARIABLES available, overloaded, muted, unmutable, mute_map, refcount, 
           rc_barrier, pc
 
@@ -165,16 +164,9 @@ Create(self) == /\ pc[self] = "Create"
                 /\ rc_barrier' = rc_barrier + 1
                 /\ IF required[self] = {}
                       THEN /\ pc' = [pc EXCEPT ![self] = "Done"]
-                      ELSE /\ pc' = [pc EXCEPT ![self] = "RCBarrier"]
+                      ELSE /\ pc' = [pc EXCEPT ![self] = "Acquire"]
                 /\ UNCHANGED << available, overloaded, muted, unmutable, 
                                 mute_map, required, acquired, mutor >>
-
-RCBarrier(self) == /\ pc[self] = "RCBarrier"
-                   /\ rc_barrier = Cardinality(Behaviours)
-                   /\ pc' = [pc EXCEPT ![self] = "Acquire"]
-                   /\ UNCHANGED << available, overloaded, muted, unmutable, 
-                                   mute_map, refcount, rc_barrier, required, 
-                                   acquired, mutor >>
 
 Acquire(self) == /\ pc[self] = "Acquire"
                  /\ LET next == Min(required[self]) IN
@@ -196,7 +188,7 @@ Acquire(self) == /\ pc[self] = "Acquire"
 
 Action(self) == /\ pc[self] = "Action"
                 /\ Assert(~Intersection(acquired[self], muted), 
-                          "Failure of assertion at line 85, column 3.")
+                          "Failure of assertion at line 82, column 3.")
                 /\ IF overloaded /= {} /\ ~Intersection(acquired[self], overloaded)
                       THEN /\ \/ /\ \E mutor_ \in overloaded:
                                       mutor' = [mutor EXCEPT ![self] = mutor_]
@@ -226,6 +218,7 @@ Complete(self) == /\ pc[self] = "Complete"
                                   mutor >>
 
 MuteMapScan(self) == /\ pc[self] = "MuteMapScan"
+                     /\ rc_barrier = Cardinality(Behaviours)
                      /\ LET unmuting == UNION Range([c \in {k \in Cowns : TriggersUnmute(k)} |-> mute_map[c]]) IN
                           /\ mute_map' = [c \in Cowns |-> IF TriggersUnmute(c) THEN {} ELSE mute_map[c]]
                           /\ muted' = muted \ unmuting
@@ -234,9 +227,8 @@ MuteMapScan(self) == /\ pc[self] = "MuteMapScan"
                      /\ UNCHANGED << overloaded, unmutable, refcount, 
                                      rc_barrier, required, acquired, mutor >>
 
-behaviour(self) == Create(self) \/ RCBarrier(self) \/ Acquire(self)
-                      \/ Action(self) \/ Complete(self)
-                      \/ MuteMapScan(self)
+behaviour(self) == Create(self) \/ Acquire(self) \/ Action(self)
+                      \/ Complete(self) \/ MuteMapScan(self)
 
 (* Allow infinite stuttering to prevent deadlock on termination. *)
 Terminating == /\ \A self \in ProcSet: pc[self] = "Done"
@@ -250,6 +242,6 @@ Spec == /\ Init /\ [][Next]_vars
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
-\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-b5755cd0f6a6c79723b5574d2cb5d19f
+\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-31975375dc47377a475d138091131e3c
 
 ====
