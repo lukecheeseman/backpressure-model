@@ -61,7 +61,7 @@ Create:
 
 Acquire:
   with next = Min(required) do
-    if Intersection(overloaded, acquired \union required)
+    if Intersection(overloaded \union unmutable, acquired \union required)
       /\ (next \notin unmutable \/ next \in muted)
     then
       \* Make unmutable and schedule
@@ -120,7 +120,7 @@ end process;
 
 end algorithm; *)
 
-\* BEGIN TRANSLATION - the hash of the PCal code: PCal-3dcf7f33b61833cd344c62b05aa5a5e5
+\* BEGIN TRANSLATION - the hash of the PCal code: PCal-e57af9a257189bc27c2f957a18bdb114
 VARIABLES available, overloaded, muted, unmutable, mute_map, refcount, 
           rc_barrier, pc
 
@@ -172,7 +172,7 @@ Create(self) == /\ pc[self] = "Create"
 
 Acquire(self) == /\ pc[self] = "Acquire"
                  /\ LET next == Min(required[self]) IN
-                      /\ IF  Intersection(overloaded, acquired[self] \union required[self])
+                      /\ IF  Intersection(overloaded \union unmutable, acquired[self] \union required[self])
                             /\ (next \notin unmutable \/ next \in muted)
                             THEN /\ unmutable' = (unmutable \union {next})
                                  /\ muted' = muted \ {next}
@@ -245,6 +245,6 @@ Spec == /\ Init /\ [][Next]_vars
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
-\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-acec41c40e63aa940c8ebcc18caf13b6
+\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-3d3bc9b392cc153bec48527b61386a4c
 
 ====
