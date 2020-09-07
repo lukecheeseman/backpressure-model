@@ -63,25 +63,28 @@ RCBarrier:
   await untracked_behaviours = 0;
 
 Acquire:
-  with next = Min(required) do
-    if Intersects(overloaded \union protected, acquired \union required)
-      /\ (next \notin protected \/ next \in muted)
-    then
-      \* Make protected and schedule
-      protected := protected \union {next};
-      muted := muted \ {next};
-      available := available \union {next};
-    else
-      \* Acquire cown
-      await next \in available;
-      acquired := acquired \union {next};
-      required := required \ {next};
-      available := available \ {next};
-    end if;
-    if required /= {} then
-      goto Acquire;
-    end if;
-  end with;
+  while required /= acquired do
+Protect:
+    with remaining = required \ acquired do
+      if Intersects(required, overloaded \union protected) then
+        \* TODO: drop protected state when RC from "priority" cowns is 0
+        protected := protected \union remaining;
+        muted := muted \ remaining;
+        available := available \union remaining;
+      end if;
+    end with;
+AcquireInner:
+    with next = Min(required \ acquired) do
+      await (next \in available)
+        \* TODO: this should be fixed, or implemented
+        \/ (Intersects(required, overloaded \union protected)
+            /\ (next \in muted));
+      if next \in available then
+        acquired := acquired \union {next};
+        available := available \ {next};
+      end if;
+    end with;
+  end while;
 
 Action:
   assert \A c \in acquired: refcount[c] > 0;
@@ -109,10 +112,11 @@ Action:
   end with;
 
   refcount := [c \in acquired |-> refcount[c] - 1] @@ refcount;
+  acquired := {};
 
 MuteMapScan:
   with unmuting =
-    UNION Range([c \in {k \in Cowns : TriggersUnmute(k)} |-> mute_map[c]])
+    UNION Range([c \in {k \in Cowns: TriggersUnmute(k)} |-> mute_map[c]])
   do
     mute_map := [c \in Cowns |-> IF TriggersUnmute(c) THEN {} ELSE mute_map[c]];
     muted := muted \ unmuting;
@@ -122,8 +126,8 @@ end process;
 
 end algorithm; *)
 
-\* BEGIN TRANSLATION - the hash of the PCal code: PCal-74d9239b064156459abff57a9650982e
-VARIABLES available, overloaded, muted, protected, mute_map, refcount,
+\* BEGIN TRANSLATION - the hash of the PCal code: PCal-7782c18010adad90d6c7d85df1b23a3a
+VARIABLES available, overloaded, muted, protected, mute_map, refcount, 
           untracked_behaviours, pc
 
 (* define statement *)
@@ -144,7 +148,7 @@ TriggersUnmute(mutor) ==
 
 VARIABLES required, acquired
 
-vars == << available, overloaded, muted, protected, mute_map, refcount,
+vars == << available, overloaded, muted, protected, mute_map, refcount, 
            untracked_behaviours, pc, required, acquired >>
 
 ProcSet == (Behaviours)
@@ -168,40 +172,56 @@ Create(self) == /\ pc[self] = "Create"
                 /\ IF required[self] = {}
                       THEN /\ pc' = [pc EXCEPT ![self] = "Done"]
                       ELSE /\ pc' = [pc EXCEPT ![self] = "RCBarrier"]
-                /\ UNCHANGED << available, overloaded, muted, protected,
+                /\ UNCHANGED << available, overloaded, muted, protected, 
                                 mute_map, required, acquired >>
 
 RCBarrier(self) == /\ pc[self] = "RCBarrier"
                    /\ untracked_behaviours = 0
                    /\ pc' = [pc EXCEPT ![self] = "Acquire"]
-                   /\ UNCHANGED << available, overloaded, muted, protected,
-                                   mute_map, refcount, untracked_behaviours,
+                   /\ UNCHANGED << available, overloaded, muted, protected, 
+                                   mute_map, refcount, untracked_behaviours, 
                                    required, acquired >>
 
 Acquire(self) == /\ pc[self] = "Acquire"
-                 /\ LET next == Min(required[self]) IN
-                      /\ IF  Intersects(overloaded \union protected, acquired[self] \union required[self])
-                            /\ (next \notin protected \/ next \in muted)
-                            THEN /\ protected' = (protected \union {next})
-                                 /\ muted' = muted \ {next}
-                                 /\ available' = (available \union {next})
-                                 /\ UNCHANGED << required, acquired >>
-                            ELSE /\ next \in available
-                                 /\ acquired' = [acquired EXCEPT ![self] = acquired[self] \union {next}]
-                                 /\ required' = [required EXCEPT ![self] = required[self] \ {next}]
-                                 /\ available' = available \ {next}
-                                 /\ UNCHANGED << muted, protected >>
-                      /\ IF required'[self] /= {}
-                            THEN /\ pc' = [pc EXCEPT ![self] = "Acquire"]
-                            ELSE /\ pc' = [pc EXCEPT ![self] = "Action"]
-                 /\ UNCHANGED << overloaded, mute_map, refcount,
-                                 untracked_behaviours >>
+                 /\ IF required[self] /= acquired[self]
+                       THEN /\ pc' = [pc EXCEPT ![self] = "Protect"]
+                       ELSE /\ pc' = [pc EXCEPT ![self] = "Action"]
+                 /\ UNCHANGED << available, overloaded, muted, protected, 
+                                 mute_map, refcount, untracked_behaviours, 
+                                 required, acquired >>
+
+Protect(self) == /\ pc[self] = "Protect"
+                 /\ LET remaining == required[self] \ acquired[self] IN
+                      IF Intersects(required[self], overloaded \union protected)
+                         THEN /\ protected' = (protected \union remaining)
+                              /\ muted' = muted \ remaining
+                              /\ available' = (available \union remaining)
+                         ELSE /\ TRUE
+                              /\ UNCHANGED << available, muted, protected >>
+                 /\ pc' = [pc EXCEPT ![self] = "AcquireInner"]
+                 /\ UNCHANGED << overloaded, mute_map, refcount, 
+                                 untracked_behaviours, required, acquired >>
+
+AcquireInner(self) == /\ pc[self] = "AcquireInner"
+                      /\ LET next == Min(required[self] \ acquired[self]) IN
+                           /\     (next \in available)
+                              
+                              \/ (Intersects(required[self], overloaded \union protected)
+                                  /\ (next \in muted))
+                           /\ IF next \in available
+                                 THEN /\ acquired' = [acquired EXCEPT ![self] = acquired[self] \union {next}]
+                                      /\ available' = available \ {next}
+                                 ELSE /\ TRUE
+                                      /\ UNCHANGED << available, acquired >>
+                      /\ pc' = [pc EXCEPT ![self] = "Acquire"]
+                      /\ UNCHANGED << overloaded, muted, protected, mute_map, 
+                                      refcount, untracked_behaviours, required >>
 
 Action(self) == /\ pc[self] = "Action"
-                /\ Assert(\A c \in acquired[self]: refcount[c] > 0,
-                          "Failure of assertion at line 87, column 3.")
-                /\ Assert(~Intersects(acquired[self], muted),
-                          "Failure of assertion at line 88, column 3.")
+                /\ Assert(\A c \in acquired[self]: refcount[c] > 0, 
+                          "Failure of assertion at line 90, column 3.")
+                /\ Assert(~Intersects(acquired[self], muted), 
+                          "Failure of assertion at line 91, column 3.")
                 /\ \E overload \in SUBSET acquired[self]:
                      overloaded' = ((overloaded \ acquired[self]) \union overload)
                 /\ \E receiver \in Subsets(Cowns, 0, 1):
@@ -215,21 +235,21 @@ Action(self) == /\ pc[self] = "Action"
                         ELSE /\ available' = (available \union acquired[self])
                              /\ UNCHANGED << muted, mute_map >>
                 /\ refcount' = [c \in acquired[self] |-> refcount[c] - 1] @@ refcount
+                /\ acquired' = [acquired EXCEPT ![self] = {}]
                 /\ pc' = [pc EXCEPT ![self] = "MuteMapScan"]
-                /\ UNCHANGED << protected, untracked_behaviours, required,
-                                acquired >>
+                /\ UNCHANGED << protected, untracked_behaviours, required >>
 
 MuteMapScan(self) == /\ pc[self] = "MuteMapScan"
-                     /\ LET unmuting == UNION Range([c \in {k \in Cowns : TriggersUnmute(k)} |-> mute_map[c]]) IN
+                     /\ LET unmuting == UNION Range([c \in {k \in Cowns: TriggersUnmute(k)} |-> mute_map[c]]) IN
                           /\ mute_map' = [c \in Cowns |-> IF TriggersUnmute(c) THEN {} ELSE mute_map[c]]
                           /\ muted' = muted \ unmuting
                           /\ available' = (available \union unmuting)
                      /\ pc' = [pc EXCEPT ![self] = "Done"]
-                     /\ UNCHANGED << overloaded, protected, refcount,
-                                     untracked_behaviours, required,
-                                     acquired >>
+                     /\ UNCHANGED << overloaded, protected, refcount, 
+                                     untracked_behaviours, required, acquired >>
 
 behaviour(self) == Create(self) \/ RCBarrier(self) \/ Acquire(self)
+                      \/ Protect(self) \/ AcquireInner(self)
                       \/ Action(self) \/ MuteMapScan(self)
 
 (* Allow infinite stuttering to prevent deadlock on termination. *)
@@ -244,6 +264,6 @@ Spec == /\ Init /\ [][Next]_vars
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
-\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-3514e933843e14d750fcf33050ae8dae
+\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-8d7b1653ace414919f25c26410868a05
 
 ====
