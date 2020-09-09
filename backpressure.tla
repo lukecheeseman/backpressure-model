@@ -113,20 +113,28 @@ Action:
 
   refcount := [c \in acquired |-> refcount[c] - 1] @@ refcount;
   acquired := {};
+end process;
 
-MuteMapScan:
-  with unmuting =
-    UNION Range([c \in {k \in Cowns: TriggersUnmute(k)} |-> mute_map[c]])
-  do
-    mute_map := [c \in Cowns |-> IF TriggersUnmute(c) THEN {} ELSE mute_map[c]];
-    muted := muted \ unmuting;
-    available := available \union unmuting;
-  end with;
+fair+ process scheduler = 0
+begin
+RCBarrier:
+  await untracked_behaviours = 0;
+Scan:
+  while (\E c \in Cowns: refcount[c] > 0) \/ (UNION Range(mute_map) /= {}) do
+    with unmuting =
+      UNION Range([k \in {c \in Cowns: TriggersUnmute(c)} |-> mute_map[k]])
+    do
+      mute_map := [k \in {c \in Cowns: TriggersUnmute(c)} |-> {}] @@ mute_map;
+      muted := muted \ unmuting;
+      available := available \union unmuting;
+    end with;
+  end while;
 end process;
 
 end algorithm; *)
 
-\* BEGIN TRANSLATION - the hash of the PCal code: PCal-7782c18010adad90d6c7d85df1b23a3a
+\* BEGIN TRANSLATION - the hash of the PCal code: PCal-808296b7a0c5a9737f6dcb24fb6671ae
+\* Label RCBarrier of process behaviour at line 63 col 3 changed to RCBarrier_
 VARIABLES available, overloaded, muted, protected, mute_map, refcount, 
           untracked_behaviours, pc
 
@@ -151,7 +159,7 @@ VARIABLES required, acquired
 vars == << available, overloaded, muted, protected, mute_map, refcount, 
            untracked_behaviours, pc, required, acquired >>
 
-ProcSet == (Behaviours)
+ProcSet == (Behaviours) \cup {0}
 
 Init == (* Global variables *)
         /\ available = Cowns
@@ -164,23 +172,24 @@ Init == (* Global variables *)
         (* Process behaviour *)
         /\ required \in [Behaviours -> Subsets(Cowns, 0, 3)]
         /\ acquired = [self \in Behaviours |-> {}]
-        /\ pc = [self \in ProcSet |-> "Create"]
+        /\ pc = [self \in ProcSet |-> CASE self \in Behaviours -> "Create"
+                                        [] self = 0 -> "RCBarrier"]
 
 Create(self) == /\ pc[self] = "Create"
                 /\ refcount' = [c \in required[self] |-> refcount[c] + 1] @@ refcount
                 /\ untracked_behaviours' = untracked_behaviours - 1
                 /\ IF required[self] = {}
                       THEN /\ pc' = [pc EXCEPT ![self] = "Done"]
-                      ELSE /\ pc' = [pc EXCEPT ![self] = "RCBarrier"]
+                      ELSE /\ pc' = [pc EXCEPT ![self] = "RCBarrier_"]
                 /\ UNCHANGED << available, overloaded, muted, protected, 
                                 mute_map, required, acquired >>
 
-RCBarrier(self) == /\ pc[self] = "RCBarrier"
-                   /\ untracked_behaviours = 0
-                   /\ pc' = [pc EXCEPT ![self] = "Acquire"]
-                   /\ UNCHANGED << available, overloaded, muted, protected, 
-                                   mute_map, refcount, untracked_behaviours, 
-                                   required, acquired >>
+RCBarrier_(self) == /\ pc[self] = "RCBarrier_"
+                    /\ untracked_behaviours = 0
+                    /\ pc' = [pc EXCEPT ![self] = "Acquire"]
+                    /\ UNCHANGED << available, overloaded, muted, protected, 
+                                    mute_map, refcount, untracked_behaviours, 
+                                    required, acquired >>
 
 Acquire(self) == /\ pc[self] = "Acquire"
                  /\ IF required[self] /= acquired[self]
@@ -236,34 +245,48 @@ Action(self) == /\ pc[self] = "Action"
                              /\ UNCHANGED << muted, mute_map >>
                 /\ refcount' = [c \in acquired[self] |-> refcount[c] - 1] @@ refcount
                 /\ acquired' = [acquired EXCEPT ![self] = {}]
-                /\ pc' = [pc EXCEPT ![self] = "MuteMapScan"]
+                /\ pc' = [pc EXCEPT ![self] = "Done"]
                 /\ UNCHANGED << protected, untracked_behaviours, required >>
 
-MuteMapScan(self) == /\ pc[self] = "MuteMapScan"
-                     /\ LET unmuting == UNION Range([c \in {k \in Cowns: TriggersUnmute(k)} |-> mute_map[c]]) IN
-                          /\ mute_map' = [c \in Cowns |-> IF TriggersUnmute(c) THEN {} ELSE mute_map[c]]
-                          /\ muted' = muted \ unmuting
-                          /\ available' = (available \union unmuting)
-                     /\ pc' = [pc EXCEPT ![self] = "Done"]
-                     /\ UNCHANGED << overloaded, protected, refcount, 
-                                     untracked_behaviours, required, acquired >>
-
-behaviour(self) == Create(self) \/ RCBarrier(self) \/ Acquire(self)
+behaviour(self) == Create(self) \/ RCBarrier_(self) \/ Acquire(self)
                       \/ Protect(self) \/ AcquireInner(self)
-                      \/ Action(self) \/ MuteMapScan(self)
+                      \/ Action(self)
+
+RCBarrier == /\ pc[0] = "RCBarrier"
+             /\ untracked_behaviours = 0
+             /\ pc' = [pc EXCEPT ![0] = "Scan"]
+             /\ UNCHANGED << available, overloaded, muted, protected, mute_map, 
+                             refcount, untracked_behaviours, required, 
+                             acquired >>
+
+Scan == /\ pc[0] = "Scan"
+        /\ IF (\E c \in Cowns: refcount[c] > 0) \/ (UNION Range(mute_map) /= {})
+              THEN /\ LET unmuting == UNION Range([k \in {c \in Cowns: TriggersUnmute(c)} |-> mute_map[k]]) IN
+                        /\ mute_map' = [k \in {c \in Cowns: TriggersUnmute(c)} |-> {}] @@ mute_map
+                        /\ muted' = muted \ unmuting
+                        /\ available' = (available \union unmuting)
+                   /\ pc' = [pc EXCEPT ![0] = "Scan"]
+              ELSE /\ pc' = [pc EXCEPT ![0] = "Done"]
+                   /\ UNCHANGED << available, muted, mute_map >>
+        /\ UNCHANGED << overloaded, protected, refcount, untracked_behaviours, 
+                        required, acquired >>
+
+scheduler == RCBarrier \/ Scan
 
 (* Allow infinite stuttering to prevent deadlock on termination. *)
 Terminating == /\ \A self \in ProcSet: pc[self] = "Done"
                /\ UNCHANGED vars
 
-Next == (\E self \in Behaviours: behaviour(self))
+Next == scheduler
+           \/ (\E self \in Behaviours: behaviour(self))
            \/ Terminating
 
 Spec == /\ Init /\ [][Next]_vars
         /\ \A self \in Behaviours : WF_vars(behaviour(self))
+        /\ SF_vars(scheduler)
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
-\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-8d7b1653ace414919f25c26410868a05
+\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-33af1951c1e3c74e2f4b250a15290664
 
 ====
