@@ -22,32 +22,41 @@ Subsets(s, min, max) ==
 
 (* --algorithm backpressure
 
-\* TODO: annotate everything!
-
 variables
+  \* Cowns available for running behaviours
   available = Cowns,
+  \* Cowns that are overloaded
   overloaded = {},
+  \* Cowns that are muted
   muted = {},
+  \* Cowns that are protected
   protected = {},
+  \* Mapping of mutor to muted
   mute_map = [c \in Cowns |-> {}],
+  \* Count of behaviours that have yet to run on each cown
   refcount = [c \in Cowns |-> 0],
+  \* Count of behaviours with untracked refcounts
   untracked_behaviours = Cardinality(Behaviours),
 
 define
-  MutedInv == ~Intersects(muted, UNION {protected, overloaded, available})
-  UnmutableInv == ~Intersects(protected, muted)
+  \* Muted cowns must not be available, overloaded, or protected.
+  MutedInv == ~Intersects(muted, UNION {available, overloaded, protected})
+  \* All muted cowns must exist in at least one mute map entry.
   MuteMapInv == \A m \in muted: m \in UNION Range(mute_map)
+  \* Refcounts must not drop below 0.
   RefcountInv == \A c \in Cowns: refcount[c] >= 0
+  \* All refcounts must eventually drop to 0.
   RefcountDropInv ==
     (\A b \in Behaviours: pc[b] = "Done") => (\A c \in Cowns: refcount[c] = 0)
 
+  \* All invalid mute map entries will eventually be removed.
   WillUnmute ==
     []<>(\A k \in DOMAIN mute_map: mute_map[k] = {} \/ k \in overloaded)
 
-  TriggersMute(mutor) ==
-    (refcount[mutor] > 0) /\ (mutor \in (overloaded \union muted))
-  HasPriority(cown) ==
-    (refcount[cown] > 0) /\ (cown \in (overloaded \union protected))
+  \* Sending to receiver should mute senders.
+  TriggersMuting(receiver) == receiver \in (overloaded \union muted)
+  \* Cown cannot be muted.
+  HasPriority(cown) == cown \in (overloaded \union protected)
 end define;
 
 fair process behaviour \in Behaviours
@@ -56,19 +65,25 @@ variables
   acquired = {},
 begin
 Create:
+  \* Add a refcount to all required cowns.
   refcount := [c \in required |-> refcount[c] + 1] @@ refcount;
+  \* Indicate that the refcounts for this behaviour have been tracked.
   untracked_behaviours := untracked_behaviours - 1;
   \* Empty required set used to represent fewer behaviours in the system.
   if required = {} then goto Done; end if;
 
 RCBarrier:
+  \* Wait for refcounts to be valid.
   await untracked_behaviours = 0;
 
 Acquire:
+  \* Acquire all cowns, one at a time.
   while required /= acquired do
 Protect:
     with remaining = required \ acquired do
+      \* Protected receivers protect all other receivers
       if \E c \in required: HasPriority(c) then
+        \* All previously muted cowns are unmuted when they become protected.
         \* TODO: drop protected state when RC from "priority" cowns is 0
         protected := protected \union remaining;
         available := available \union (remaining \intersect  muted);
@@ -77,10 +92,12 @@ Protect:
     end with;
 RunStep:
     with next = Min(required \ acquired) do
+      \* Wait for the next required cown to become available.
       await (next \in available)
         \* TODO: this should be fixed, or implemented
         \/ ((next \in muted) /\ (\E c \in required: HasPriority(c)));
       if next \in available then
+        \* Acquire the next cown and remove it from the available set.
         acquired := acquired \union {next};
         available := available \ {next};
       end if;
@@ -98,22 +115,28 @@ Action:
     overloaded := (overloaded \ acquired) \union overload;
   end with;
 
-  with receiver \in Subsets(Cowns, 0, 1) do
+  \* Select zero or one receiver with a nonzero refcount.
+  with receiver \in Subsets({c \in Cowns: refcount[c] > 0}, 0, 1) do
+    \* Mute senders if the receiver triggers muting and the receiver isn't one
+    \* of the senders.
     if (receiver /= {})
       /\ ~Intersects(receiver, acquired)
-      /\ TriggersMute(Unwrap(receiver))
+      /\ TriggersMuting(Unwrap(receiver))
     then
-      \* don't mute the cowns getting overloaded
+      \* Mute senders that have no priority and are not becoming overloaded.
       with muting = {c \in acquired: ~HasPriority(c)} \ overloaded do
         muted := muted \union muting;
+        \* Add muted senders to the mute map entry for the receiver.
         mute_map := [m \in receiver |-> mute_map[m] \union muting] @@ mute_map;
         available := available \union (acquired \ muting);
       end with;
     else
+      \* Senders are not muted, so all become available.
       available := available \union acquired;
     end if;
   end with;
 
+  \* Decrement the refcounts of all acquired cowns.
   refcount := [c \in acquired |-> refcount[c] - 1] @@ refcount;
   acquired := {};
 end process;
@@ -121,13 +144,18 @@ end process;
 fair+ process scheduler = 0
 begin
 RCBarrier:
+  \* Wait for refcounts to be valid.
   await untracked_behaviours = 0;
 MuteMapScan:
+  \* Remove invalid mute map entries whenever they may exist.
   while (\E c \in Cowns: refcount[c] > 0) \/ (UNION Range(mute_map) /= {}) do
     with
-      keys = {c \in Cowns: ~TriggersMute(c)},
+      \* Invalid keys have a zero refcount or no longer trigger muting.
+      keys = {c \in Cowns: (refcount[c] = 0) \/ ~TriggersMuting(c)},
+      \* Unmute the range of all invalid keys.
       unmuting = UNION Range([k \in keys |-> mute_map[k]]),
     do
+      \* Delete entries and unmute.
       mute_map := [k \in keys |-> {}] @@ mute_map;
       muted := muted \ unmuting;
       available := available \union unmuting;
@@ -137,26 +165,29 @@ end process;
 
 end algorithm; *)
 
-\* BEGIN TRANSLATION - the hash of the PCal code: PCal-bc97ce7396e096af0b3ba16b1cb7b91e
-\* Label RCBarrier of process behaviour at line 65 col 3 changed to RCBarrier_
+\* BEGIN TRANSLATION - the hash of the PCal code: PCal-1a664984619a118ef99c0017cbfb8d55
+\* Label RCBarrier of process behaviour at line 77 col 3 changed to RCBarrier_
 VARIABLES available, overloaded, muted, protected, mute_map, refcount, 
           untracked_behaviours, pc
 
 (* define statement *)
-MutedInv == ~Intersects(muted, UNION {protected, overloaded, available})
-UnmutableInv == ~Intersects(protected, muted)
+MutedInv == ~Intersects(muted, UNION {available, overloaded, protected})
+
 MuteMapInv == \A m \in muted: m \in UNION Range(mute_map)
+
 RefcountInv == \A c \in Cowns: refcount[c] >= 0
+
 RefcountDropInv ==
   (\A b \in Behaviours: pc[b] = "Done") => (\A c \in Cowns: refcount[c] = 0)
+
 
 WillUnmute ==
   []<>(\A k \in DOMAIN mute_map: mute_map[k] = {} \/ k \in overloaded)
 
-TriggersMute(mutor) ==
-  (refcount[mutor] > 0) /\ (mutor \in (overloaded \union muted))
-HasPriority(cown) ==
-  (refcount[cown] > 0) /\ (cown \in (overloaded \union protected))
+
+TriggersMuting(receiver) == receiver \in (overloaded \union muted)
+
+HasPriority(cown) == cown \in (overloaded \union protected)
 
 VARIABLES required, acquired
 
@@ -231,15 +262,15 @@ RunStep(self) == /\ pc[self] = "RunStep"
 
 Action(self) == /\ pc[self] = "Action"
                 /\ Assert(\A c \in acquired[self]: refcount[c] > 0, 
-                          "Failure of assertion at line 91, column 3.")
+                          "Failure of assertion at line 108, column 3.")
                 /\ Assert(~Intersects(acquired[self], muted), 
-                          "Failure of assertion at line 92, column 3.")
+                          "Failure of assertion at line 109, column 3.")
                 /\ \E overload \in SUBSET acquired[self]:
                      overloaded' = ((overloaded \ acquired[self]) \union overload)
-                /\ \E receiver \in Subsets(Cowns, 0, 1):
+                /\ \E receiver \in Subsets({c \in Cowns: refcount[c] > 0}, 0, 1):
                      IF  (receiver /= {})
                         /\ ~Intersects(receiver, acquired[self])
-                        /\ TriggersMute(Unwrap(receiver))
+                        /\ TriggersMuting(Unwrap(receiver))
                         THEN /\ LET muting == {c \in acquired[self]: ~HasPriority(c)} \ overloaded' IN
                                   /\ muted' = (muted \union muting)
                                   /\ mute_map' = [m \in receiver |-> mute_map[m] \union muting] @@ mute_map
@@ -263,7 +294,7 @@ RCBarrier == /\ pc[0] = "RCBarrier"
 
 MuteMapScan == /\ pc[0] = "MuteMapScan"
                /\ IF (\E c \in Cowns: refcount[c] > 0) \/ (UNION Range(mute_map) /= {})
-                     THEN /\ LET keys == {c \in Cowns: ~TriggersMute(c)} IN
+                     THEN /\ LET keys == {c \in Cowns: (refcount[c] = 0) \/ ~TriggersMuting(c)} IN
                                LET unmuting == UNION Range([k \in keys |-> mute_map[k]]) IN
                                  /\ mute_map' = [k \in keys |-> {}] @@ mute_map
                                  /\ muted' = muted \ unmuting
@@ -290,7 +321,7 @@ Spec == /\ Init /\ [][Next]_vars
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
-\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-e688854bd0720b5b59448611c5dcab51
+\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-f5051a41e23942d731a94f2cf058252c
 
 AcquiredUnavailable == \A b \in Behaviours: ~Intersects(acquired[b], available)
 
