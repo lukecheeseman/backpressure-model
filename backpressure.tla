@@ -42,7 +42,7 @@ define
     (\A b \in Behaviours: pc[b] = "Done") => (\A c \in Cowns: refcount[c] = 0)
 
   \* All invalid mute map entries will eventually be removed.
-  WillUnmute ==
+  MuteMapProp ==
     []<>(\A k \in DOMAIN mute_map: mute_map[k] = {} \/ k \in overloaded)
 
   \* Sending to receiver should mute senders.
@@ -83,7 +83,7 @@ Protect:
         muted := muted \ remaining;
       end if;
     end with;
-RunStep:
+AcquireNext:
     with next = Min(required \ acquired) do
       \* Wait for the next required cown to become available.
       await (next \in available)
@@ -134,7 +134,7 @@ Action:
   acquired := {};
 end process;
 
-fair+ process scheduler = 0
+fair process scheduler = 0
 begin
 RCBarrier:
   \* Wait for refcounts to be valid.
@@ -176,6 +176,15 @@ One of the following should be done:
 
   2. The `Termination` property should be replaced by a weaker property, or
      there should be another way to model that muted cowns are eventually
-     unmuted.
+     unmuted. The property implemented in Verona currently is that any
+     behaviour requiring a cown that is overloaded on creation of the behaviour
+     will not prevent the behaviour from running. So the following example
+     remains an issue:
+      ```
+      Cown 1 is muted. Behaviour `a` requires {2}. Behaviour `b` requires {1,2}.
+      - `b`: `Protect`: 1 and 2 have no priority, nothing is protected.
+      - `a`: `Action`: overload 2.
+      - `b`: `AcquireNext`: await 1 becoming available, but 1 is muted.
+      ```
 
 *)
