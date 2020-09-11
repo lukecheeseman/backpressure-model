@@ -3,7 +3,7 @@
 EXTENDS FiniteSets, Naturals, Sequences, TLC
 
 CONSTANTS Null
-MessageLimit == 3
+MessageLimit == 5
 Cowns == 1..5
 Schedulers == 1..3
 
@@ -44,21 +44,29 @@ Run:
     \* Pop the head of its message queue
     msg = Head(queue[running]),
     \* Dequeue msg
-    queue_update = (running :> Tail(queue[running])) @@ queue,
+    queue_ = (running :> Tail(queue[running])) @@ queue,
   do
     assert running \in msg;
     assert \A c \in msg: acquired[c] \/ (c > running);
 
     if running = Max(msg) then
       \* TODO: run behaviour: create new messages, overload, mute, etc.
-      skip;
-      queue := queue_update;
+      if message_fuel > 0 then
+        either
+          with new_msg \in Subsets(Cowns, 1, 3), next = Min(new_msg) do
+            queue := (next :> Append(queue_[next], new_msg)) @@ queue_;
+          end with;
+          message_fuel := message_fuel - 1;
+        or queue := queue_;
+        end either;
+      else queue := queue_;
+      end if;
       \* Release any acquired cowns from this behaviour.
       acquired := [c \in msg |-> FALSE] @@ acquired;
     else
       \* Forward message to the next cown.
       with next = Min({c \in msg: c > running}) do
-        queue := (next :> Append(queue[next], msg)) @@ queue_update;
+        queue := (next :> Append(queue[next], msg)) @@ queue_;
       end with;
     end if;
 
