@@ -2,7 +2,7 @@
 
 EXTENDS FiniteSets, Naturals, Sequences, TLC
 
-CONSTANTS Null
+CONSTANTS Null, Normal, Overloaded
 MessageLimit == 5
 Cowns == 1..5
 Schedulers == 1..3
@@ -21,11 +21,14 @@ variables
   initial_msg \in {cowns \in Subsets(Cowns, 1, 3): TRUE},
   queue = (Min(initial_msg) :> <<initial_msg>>) @@ [c \in Cowns |-> <<>>],
   acquired = [c \in Cowns |-> FALSE],
+  state = [c \in Cowns |-> Normal]
 
 define
-  Sleeping(cown) == queue[cown] = <<>>
-  Available(cown) == ~Sleeping(cown) /\ ~acquired[cown]
+  Sleeping(cown) == (queue[cown] = <<>>) /\ ~acquired[cown]
+  Available(cown) == (queue[cown] /= <<>>) /\ ~acquired[cown]
   Quiescent(cowns) == \A c \in cowns: Sleeping(c)
+
+  SleepingCownsAreNormal == \A c \in Cowns: (Sleeping(c) => state[c] = Normal)
 end define;
 
 fair process scheduler \in Schedulers
@@ -49,8 +52,13 @@ Run:
     assert running \in msg;
     assert \A c \in msg: acquired[c] \/ (c > running);
 
-    if running = Max(msg) then
-      \* TODO: run behaviour: create new messages, overload, mute, etc.
+    if running < Max(msg) then
+      \* Forward message to the next cown.
+      with next = Min({c \in msg: c > running}) do
+        queue := (next :> Append(queue[next], msg)) @@ queue_;
+      end with;
+    else
+      \* Maybe create a new behaviour
       if message_fuel > 0 then
         either
           with new_msg \in Subsets(Cowns, 1, 3), next = Min(new_msg) do
@@ -61,13 +69,16 @@ Run:
         end either;
       else queue := queue_;
       end if;
+      \* Any acquired cown with more messages in its queue may toggle their
+      \* state to overloaded. Acquired cowns with an empty queue will become
+      \* normal.
+      with overload \in SUBSET {c \in msg: queue_[c] /= <<>>} do
+        state :=
+          [c \in overload |-> Overloaded] @@ [c \in msg |-> Normal] @@ state;
+      end with;
+      \* TODO: mute
       \* Release any acquired cowns from this behaviour.
       acquired := [c \in msg |-> FALSE] @@ acquired;
-    else
-      \* Forward message to the next cown.
-      with next = Min({c \in msg: c > running}) do
-        queue := (next :> Append(queue[next], msg)) @@ queue_;
-      end with;
     end if;
 
     running := Null;
@@ -76,5 +87,7 @@ Run:
 end process;
 
 end algorithm; *)
+
+Completion == (\A sched \in Schedulers: pc[sched] = "Done") => Quiescent(Cowns)
 
 ====
