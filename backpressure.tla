@@ -2,6 +2,13 @@
 
 EXTENDS FiniteSets, Naturals, Sequences, TLC
 
+(*
+Goals:
+- Qiuescence is reached
+- A message that has acquired an overloaded cown will never be placed on the
+  queue of a muted cown
+*)
+
 CONSTANTS Null, Normal, Overloaded
 MessageLimit == 5
 Cowns == 1..5
@@ -13,6 +20,11 @@ Min(s) == CHOOSE x \in s: \A y \in s \ {x}: y > x
 Max(s) == CHOOSE x \in s: \A y \in s \ {x}: y < x
 Subsets(s, min, max) ==
   {cs \in SUBSET s: (Cardinality(cs) >= min) /\ (Cardinality(cs) <= max)}
+Pick(s) == CHOOSE x \in s: TRUE
+ReduceSet(op(_, _), set, acc) ==
+  LET f[s \in SUBSET set] ==
+    IF s = {} THEN acc ELSE LET x == Pick(s) IN op(x, f[s \ {x}])
+  IN f[set]
 
 (* --algorithm backpressure
 
@@ -21,14 +33,20 @@ variables
   initial_msg \in {cowns \in Subsets(Cowns, 1, 3): TRUE},
   queue = (Min(initial_msg) :> <<initial_msg>>) @@ [c \in Cowns |-> <<>>],
   acquired = [c \in Cowns |-> FALSE],
-  state = [c \in Cowns |-> Normal]
+  state = [c \in Cowns |-> Normal],
 
 define
   Sleeping(cown) == (queue[cown] = <<>>) /\ ~acquired[cown]
   Available(cown) == (queue[cown] /= <<>>) /\ ~acquired[cown]
   Quiescent(cowns) == \A c \in cowns: Sleeping(c)
+  RefCount(cown) ==
+    LET RC(q, c) == Cardinality({i \in DOMAIN q: c \in q[i]})
+    IN ReduceSet(LAMBDA c, sum: sum + RC(queue[c], cown), Cowns, 0)
 
-  SleepingCownsAreNormal == \A c \in Cowns: (Sleeping(c) => state[c] = Normal)
+  SleepingCownsAreNormal ==
+    \A c \in Cowns: (Sleeping(c) => state[c] = Normal)
+  CownWithZeroRCIsSleeping ==
+    \A c \in Cowns: (RefCount(c) = 0 => Sleeping(c))
 end define;
 
 fair process scheduler \in Schedulers
