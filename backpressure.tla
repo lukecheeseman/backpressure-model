@@ -35,31 +35,51 @@ variables
   state = [c \in Cowns |-> Normal],
 
 define
-  Sleeping(cown) == (queue[cown] = <<>>) /\ ~acquired[cown]
-  Available(cown) == (queue[cown] /= <<>>) /\ ~acquired[cown]
+  Sleeping(cown)
+    == (queue[cown] = <<>>)
+    /\ ~acquired[cown]
+  Available(cown)
+    == (queue[cown] /= <<>>)
+    /\ ~acquired[cown]
+    /\ (state[cown] /= Muted)
   Quiescent(cowns) == \A c \in cowns: Sleeping(c)
   TriggersMuting(cown) == state[cown] \in {Overloaded, Muted}
   RefCount(cown) ==
     LET RC(q, c) == Cardinality({i \in DOMAIN q: c \in q[i]})
     IN ReduceSet(LAMBDA c, sum: sum + RC(queue[c], cown), Cowns, 0)
 
-  SleepingCownsAreNormal ==
-    \A c \in Cowns: (Sleeping(c) => state[c] = Normal)
+  SleepingCownsArentOverloaded ==
+    \A c \in Cowns: (Sleeping(c) => state[c] /= Overloaded)
   CownWithZeroRCIsSleeping ==
     \A c \in Cowns: (RefCount(c) = 0 => Sleeping(c))
 end define;
 
 fair process scheduler \in Schedulers
-variables running = Null
+variables
+  running = Null,
+  mute_map = [c \in Cowns |-> {}],
 begin
 Acquire:
-  await (\E c \in Cowns: Available(c)) \/ Quiescent(Cowns);
-  if Quiescent(Cowns) then
-    goto Done;
-  else
-    with c \in {c \in Cowns: Available(c)} do running := c; end with;
-    acquired := (running :> TRUE) @@ acquired;
-  end if;
+  with
+    \* Invalid keys have a zero refcount or no longer trigger muting.
+    keys = {c \in Cowns: (RefCount(c) = 0) \/ ~TriggersMuting(c)},
+    \* Unmute the muted range of all invalid keys.
+    unmuting =
+      {c \in UNION Range([k \in keys |-> mute_map[k]]): state[c] = Muted},
+  do
+    \* Delete entries and unmute.
+    mute_map := [k \in keys |-> {}] @@ mute_map;
+    state := [c \in unmuting |-> Normal] @@ state;
+
+    await (\E c \in Cowns: Available(c)) \/ Quiescent(Cowns);
+    if Quiescent(Cowns) then
+      goto Done;
+    else
+      with c \in {c \in Cowns: Available(c)} do running := c; end with;
+      acquired := (running :> TRUE) @@ acquired;
+    end if;
+  end with;
+
 Run:
   with
     \* Pop the head of its message queue
@@ -90,10 +110,16 @@ Run:
             with new_msg \in Subsets(Cowns, 1, 3), next = Min(new_msg) do
               queue := (next :> Append(queue_[next], new_msg)) @@ queue_;
               \* Mute if receiver triggers muting
-              \* if TriggersMuting(next) then
-              \*   state := (running :> Muted) @@ state_;
-              \* end if;
-              state := state_;
+              if TriggersMuting(next)
+                /\ (running \notin new_msg)
+                /\ (state[running] /= Overloaded)
+              then
+                state := (running :> Muted) @@ state_;
+                mute_map :=
+                  (next :> mute_map[next] \union {running}) @@ mute_map;
+              else
+                state := state_;
+              end if;
             end with;
             message_fuel := message_fuel - 1;
           or
