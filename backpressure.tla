@@ -17,13 +17,13 @@ Subsets(s, min, max) ==
 variables
   \* Cowns available for running behaviours
   available = Cowns,
+  \* Cowns that are unavailable
+  unavailable = {},
   \* Cowns that are overloaded
   overloaded = {},
-  \* Cowns that are muted
-  muted = {},
   \* Cowns that are protected
   protected = {},
-  \* Mapping of mutor to muted
+  \* Mapping of mutor to unavailable
   mute_map = [c \in Cowns |-> {}],
   \* Count of behaviours that have yet to run on each cown
   refcount = [c \in Cowns |-> 0],
@@ -31,10 +31,14 @@ variables
   untracked_behaviours = Cardinality(Behaviours),
 
 define
-  \* Muted cowns must not be available, overloaded, or protected.
-  MutedInv == ~Intersects(muted, UNION {available, overloaded, protected})
-  \* All muted cowns must exist in at least one mute map entry.
-  MuteMapInv == \A m \in muted: m \in UNION Range(mute_map)
+  \* unavailable cowns must not be available, overloaded, or protected.
+  UnavailableInv == ~Intersects(unavailable, UNION {available, overloaded, protected})
+  \* All unavailable cowns must exist in at least one mute map entry.
+  MuteMapInv == \A m \in unavailable: m \in UNION Range(mute_map)
+  
+  \* This does not hold
+  ReverseInv == \A m \in UNION Range(mute_map): m \in unavailable
+  
   \* Refcounts must not drop below 0.
   RefcountInv == \A c \in Cowns: refcount[c] >= 0
   \* All refcounts must eventually drop to 0.
@@ -46,9 +50,12 @@ define
     []<>(\A k \in DOMAIN mute_map: mute_map[k] = {} \/ k \in overloaded)
 
   \* Sending to receiver should mute senders.
-  TriggersMuting(receiver) == receiver \in (overloaded \union muted)
-  \* Cown cannot be muted.
+  TriggersMuting(receiver) == receiver \in (overloaded \union unavailable)
+  \* Cown cannot be unavailable.
   HasPriority(cown) == cown \in (overloaded \union protected)
+  
+  \* Overloaded(cown) == refcount[c] > threshold
+  \* Protected(cown) == \E b \in behaviours, c \in Cowns: cown \in behaviours[b] /\ c \in behaviours[b] /\ Overloaded(c)
 end define;
 
 fair process behaviour \in Behaviours
@@ -76,19 +83,20 @@ Protect:
       \* Priority (overloaded or protected) receivers protect all other
       \* receivers.
       if \E c \in required: HasPriority(c) then
-        \* All previously muted cowns are unmuted when they become protected.
+        \* All previously unavailable cowns are ununavailable when they become protected.
         \* TODO: drop protected state when RC from "priority" cowns is 0
         protected := protected \union remaining;
-        available := available \union (remaining \intersect  muted);
-        muted := muted \ remaining;
+        available := available \union (remaining \intersect  unavailable);
+        unavailable := unavailable \ remaining;
       end if;
     end with;
 AcquireNext:
     with next = Min(required \ acquired) do
       \* Wait for the next required cown to become available.
-      await (next \in available)
+      await (next \in available);
         \* TODO: see note at bottom of file
-        \/ ((next \in muted) /\ (\E c \in required: HasPriority(c)));
+        \* \/ ((next \in unavailable) /\ (\E c \in required: HasPriority(c)));
+        \* why does this prevent termination?
       if next \in available then
         \* Acquire the next cown and remove it from the available set.
         acquired := acquired \union {next};
@@ -99,34 +107,33 @@ AcquireNext:
 
 Action:
   assert \A c \in acquired: refcount[c] > 0;
-  assert ~Intersects(acquired, muted);
+  assert ~Intersects(acquired, unavailable);
 
   \* Any acquired cown may toggle their overloaded state when the behaviour
   \* completes.
-  with overload \in SUBSET acquired do
-    \* new value of overloaded is used to prevent muting later
-    overloaded := (overloaded \ acquired) \union overload;
-  end with;
-
-  \* Select zero or one receiver with a nonzero refcount.
-  with receiver \in Subsets({c \in Cowns: refcount[c] > 0}, 0, 1) do
+  with overload \in SUBSET Cowns,
+       unoverload \in SUBSET (acquired \ overloaded),
+       unmute = unavailable \ {c \in Cowns : (\E u \in (DOMAIN mute_map \ unoverload): c \in mute_map[u])} \* pick those we muted that are not in anybody elses mute set
+  do 
+    overloaded := (overloaded \ unoverload) \union overloaded;
+  
     \* Mute senders if the receiver triggers muting and the receiver isn't one
     \* of the senders.
-    if (receiver /= {})
-      /\ ~Intersects(receiver, acquired)
-      /\ TriggersMuting(Unwrap(receiver))
-    then
-      \* Mute senders that have no priority and are not becoming overloaded.
-      with muting = {c \in acquired: ~HasPriority(c)} \ overloaded do
-        muted := muted \union muting;
-        \* Add muted senders to the mute map entry for the receiver.
-        mute_map := [m \in receiver |-> mute_map[m] \union muting] @@ mute_map;
-        available := available \union (acquired \ muting);
-      end with;
-    else
-      \* Senders are not muted, so all become available.
-      available := available \union acquired;
-    end if;
+    with candidates = {c \in Cowns: refcount[c] > 0 /\ c \notin acquired /\ TriggersMuting(c)} do
+      if candidates /= {} then
+        with receiver \in candidates, muting = {c \in acquired: ~HasPriority(c)} \ overloaded do \* /\ refcount[receiver] > 0 do
+          unavailable := (unavailable \union muting) \ unmute;
+          \* Add unavailable senders to the mute map entry for the receiver.
+          mute_map := ([m \in receiver |-> mute_map[m] \union muting] @@ mute_map) \ unmute;
+          available := available \union (acquired \ muting) \union unmute;
+        end with;
+      else
+        \* Senders are not unavailable, so all become available.
+        unavailable := unavailable \ unmute;
+        available := available \union acquired \union unmute;
+        mute_map := [m \in unmute |-> {} ] @@ mute_map;
+      end if;
+    end with;
   end with;
 
   \* Decrement the refcounts of all acquired cowns.
@@ -134,29 +141,144 @@ Action:
   acquired := {};
 end process;
 
-fair process scheduler = 0
-begin
-RCBarrier:
-  \* Wait for refcounts to be valid.
-  await untracked_behaviours = 0;
-MuteMapScan:
-  \* Remove invalid mute map entries whenever they may exist.
-  while (\E c \in Cowns: refcount[c] > 0) \/ (UNION Range(mute_map) /= {}) do
-    with
-      \* Invalid keys have a zero refcount or no longer trigger muting.
-      keys = {c \in Cowns: (refcount[c] = 0) \/ ~TriggersMuting(c)},
-      \* Unmute the muted range of all invalid keys.
-      unmuting = muted \intersect (UNION Range([k \in keys |-> mute_map[k]])),
-    do
-      \* Delete entries and unmute.
-      mute_map := [k \in keys |-> {}] @@ mute_map;
-      muted := muted \ unmuting;
-      available := available \union unmuting;
-    end with;
-  end while;
-end process;
-
 end algorithm; *)
+\* BEGIN TRANSLATION - the hash of the PCal code: PCal-be07efcd40312b3da12a683a12a90f60
+VARIABLES available, unavailable, overloaded, protected, mute_map, refcount, 
+          untracked_behaviours, pc
+
+(* define statement *)
+UnavailableInv == ~Intersects(unavailable, UNION {available, overloaded, protected})
+
+MuteMapInv == \A m \in unavailable: m \in UNION Range(mute_map)
+
+
+ReverseInv == \A m \in UNION Range(mute_map): m \in unavailable
+
+
+RefcountInv == \A c \in Cowns: refcount[c] >= 0
+
+RefcountDropInv ==
+  (\A b \in Behaviours: pc[b] = "Done") => (\A c \in Cowns: refcount[c] = 0)
+
+
+MuteMapProp ==
+  []<>(\A k \in DOMAIN mute_map: mute_map[k] = {} \/ k \in overloaded)
+
+
+TriggersMuting(receiver) == receiver \in (overloaded \union unavailable)
+
+HasPriority(cown) == cown \in (overloaded \union protected)
+
+VARIABLES required, acquired
+
+vars == << available, unavailable, overloaded, protected, mute_map, refcount, 
+           untracked_behaviours, pc, required, acquired >>
+
+ProcSet == (Behaviours)
+
+Init == (* Global variables *)
+        /\ available = Cowns
+        /\ unavailable = {}
+        /\ overloaded = {}
+        /\ protected = {}
+        /\ mute_map = [c \in Cowns |-> {}]
+        /\ refcount = [c \in Cowns |-> 0]
+        /\ untracked_behaviours = Cardinality(Behaviours)
+        (* Process behaviour *)
+        /\ required \in [Behaviours -> Subsets(Cowns, 0, 3)]
+        /\ acquired = [self \in Behaviours |-> {}]
+        /\ pc = [self \in ProcSet |-> "Create"]
+
+Create(self) == /\ pc[self] = "Create"
+                /\ refcount' = [c \in required[self] |-> refcount[c] + 1] @@ refcount
+                /\ untracked_behaviours' = untracked_behaviours - 1
+                /\ IF required[self] = {}
+                      THEN /\ pc' = [pc EXCEPT ![self] = "Done"]
+                      ELSE /\ pc' = [pc EXCEPT ![self] = "RCBarrier"]
+                /\ UNCHANGED << available, unavailable, overloaded, protected, 
+                                mute_map, required, acquired >>
+
+RCBarrier(self) == /\ pc[self] = "RCBarrier"
+                   /\ untracked_behaviours = 0
+                   /\ pc' = [pc EXCEPT ![self] = "Acquire"]
+                   /\ UNCHANGED << available, unavailable, overloaded, 
+                                   protected, mute_map, refcount, 
+                                   untracked_behaviours, required, acquired >>
+
+Acquire(self) == /\ pc[self] = "Acquire"
+                 /\ IF required[self] /= acquired[self]
+                       THEN /\ pc' = [pc EXCEPT ![self] = "Protect"]
+                       ELSE /\ pc' = [pc EXCEPT ![self] = "Action"]
+                 /\ UNCHANGED << available, unavailable, overloaded, protected, 
+                                 mute_map, refcount, untracked_behaviours, 
+                                 required, acquired >>
+
+Protect(self) == /\ pc[self] = "Protect"
+                 /\ LET remaining == required[self] \ acquired[self] IN
+                      IF \E c \in required[self]: HasPriority(c)
+                         THEN /\ protected' = (protected \union remaining)
+                              /\ available' = (available \union (remaining \intersect  unavailable))
+                              /\ unavailable' = unavailable \ remaining
+                         ELSE /\ TRUE
+                              /\ UNCHANGED << available, unavailable, 
+                                              protected >>
+                 /\ pc' = [pc EXCEPT ![self] = "AcquireNext"]
+                 /\ UNCHANGED << overloaded, mute_map, refcount, 
+                                 untracked_behaviours, required, acquired >>
+
+AcquireNext(self) == /\ pc[self] = "AcquireNext"
+                     /\ LET next == Min(required[self] \ acquired[self]) IN
+                          /\ (next \in available)
+                          /\ IF next \in available
+                                THEN /\ acquired' = [acquired EXCEPT ![self] = acquired[self] \union {next}]
+                                     /\ available' = available \ {next}
+                                ELSE /\ TRUE
+                                     /\ UNCHANGED << available, acquired >>
+                     /\ pc' = [pc EXCEPT ![self] = "Acquire"]
+                     /\ UNCHANGED << unavailable, overloaded, protected, 
+                                     mute_map, refcount, untracked_behaviours, 
+                                     required >>
+
+Action(self) == /\ pc[self] = "Action"
+                /\ Assert(\A c \in acquired[self]: refcount[c] > 0, 
+                          "Failure of assertion at line 109, column 3.")
+                /\ Assert(~Intersects(acquired[self], unavailable), 
+                          "Failure of assertion at line 110, column 3.")
+                /\ \E overload \in SUBSET Cowns:
+                     \E unoverload \in SUBSET (acquired[self] \ overloaded):
+                       LET unmute == unavailable \ {c \in Cowns : (\E u \in (DOMAIN mute_map \ unoverload): c \in mute_map[u])} IN
+                         /\ overloaded' = ((overloaded \ unoverload) \union overloaded)
+                         /\ LET candidates == {c \in Cowns: refcount[c] > 0 /\ c \notin acquired[self] /\ TriggersMuting(c)} IN
+                              IF candidates /= {}
+                                 THEN /\ \E receiver \in candidates:
+                                           LET muting == {c \in acquired[self]: ~HasPriority(c)} \ overloaded' IN
+                                             /\ unavailable' = (unavailable \union muting) \ unmute
+                                             /\ mute_map' = ([m \in receiver |-> mute_map[m] \union muting] @@ mute_map) \ unmute
+                                             /\ available' = (available \union (acquired[self] \ muting) \union unmute)
+                                 ELSE /\ unavailable' = unavailable \ unmute
+                                      /\ available' = (available \union acquired[self] \union unmute)
+                                      /\ mute_map' = [m \in unmute |-> {} ] @@ mute_map
+                /\ refcount' = [c \in acquired[self] |-> refcount[c] - 1] @@ refcount
+                /\ acquired' = [acquired EXCEPT ![self] = {}]
+                /\ pc' = [pc EXCEPT ![self] = "Done"]
+                /\ UNCHANGED << protected, untracked_behaviours, required >>
+
+behaviour(self) == Create(self) \/ RCBarrier(self) \/ Acquire(self)
+                      \/ Protect(self) \/ AcquireNext(self) \/ Action(self)
+
+(* Allow infinite stuttering to prevent deadlock on termination. *)
+Terminating == /\ \A self \in ProcSet: pc[self] = "Done"
+               /\ UNCHANGED vars
+
+Next == (\E self \in Behaviours: behaviour(self))
+           \/ Terminating
+
+Spec == /\ Init /\ [][Next]_vars
+        /\ \A self \in Behaviours : WF_vars(behaviour(self))
+
+Termination == <>(\A self \in ProcSet: pc[self] = "Done")
+
+\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-c6d56c0a1e80cb53faa4ebdb1a06b17d
 
 AcquiredUnavailable == \A b \in Behaviours: ~Intersects(acquired[b], available)
 
@@ -164,9 +286,9 @@ AcquiredUnavailable == \A b \in Behaviours: ~Intersects(acquired[b], available)
 
 (* TODO in `RunStep`:
 
-The contition `(next \in muted) /\ (\E c \in required: HasPriority(c))` is used
-to ensure that muted cowns never prevent a behaviour scheduled on an overloaded
-cown from running indefinitely. Removing this condition from the `await` will
+The contition `(next \in unavailable) /\ (\E c \in required: HasPriority(c))` is used
+to ensure that unavailable cowns never indefinetly prevent a behaviour, scheduled on an
+overloaded cown, from running. Removing this condition from the `await` will
 result in the `Termination` property failing. The `Termination` property is used
 to check that all behaviours eventually run to completion.
 
@@ -175,16 +297,16 @@ One of the following should be done:
      implemented without unacceptable overhead.
 
   2. The `Termination` property should be replaced by a weaker property, or
-     there should be another way to model that muted cowns are eventually
-     unmuted. The property implemented in Verona currently is that any
+     there should be another way to model that unavailable cowns are eventually
+     ununavailable. The property implemented in Verona currently is that any
      behaviour requiring a cown that is overloaded on creation of the behaviour
      will not prevent the behaviour from running. So the following example
      remains an issue:
       ```
-      Cown 1 is muted. Behaviour `a` requires {2}. Behaviour `b` requires {1,2}.
+      Cown 1 is unavailable. Behaviour `a` requires {2}. Behaviour `b` requires {1,2}.
       - `b`: `Protect`: 1 and 2 have no priority, nothing is protected.
       - `a`: `Action`: overload 2.
-      - `b`: `AcquireNext`: await 1 becoming available, but 1 is muted.
+      - `b`: `AcquireNext`: await 1 becoming available, but 1 is unavailable.
       ```
 
 *)
