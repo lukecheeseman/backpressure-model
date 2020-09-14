@@ -33,6 +33,7 @@ variables
   queue = [c \in Cowns |-> <<{c}>>],
   acquired = [c \in Cowns |-> FALSE],
   state = [c \in Cowns |-> Normal],
+  protected = [c \in Cowns |-> FALSE],
 
 define
   Sleeping(cown)
@@ -44,6 +45,8 @@ define
     /\ (state[cown] /= Muted)
   Quiescent(cowns) == \A c \in cowns: Sleeping(c)
   TriggersMuting(cown) == state[cown] \in {Overloaded, Muted}
+  HasPriority(cown) == (state[cown] = Overloaded) \/ protected[cown]
+  Unmute(cowns, st) == [c \in {c \in cowns: st[c] = Muted} |-> Normal] @@ st
   RefCount(cown) ==
     LET RC(q, c) == Cardinality({i \in DOMAIN q: c \in q[i]})
     IN ReduceSet(LAMBDA c, sum: sum + RC(queue[c], cown), Cowns, 0)
@@ -69,7 +72,7 @@ Acquire:
   do
     \* Delete entries and unmute.
     mute_map := [k \in keys |-> {}] @@ mute_map;
-    state := [c \in unmuting |-> Normal] @@ state;
+    state := Unmute(unmuting, state);
 
     await (\E c \in Cowns: Available(c)) \/ Quiescent(Cowns);
     if Quiescent(Cowns) then
@@ -95,6 +98,11 @@ Run:
       with next = Min({c \in msg: c > running}) do
         queue := (next :> Append(queue[next], msg)) @@ queue_;
       end with;
+      \* Protect receivers if any have priority.
+      if \E c \in msg: HasPriority(c) then
+        state := Unmute(msg, state);
+        protected := [c \in msg |-> TRUE] @@ protected;
+      end if;
     else
       with
         \* Any acquired cown with more messages in its queue may toggle their
@@ -107,18 +115,27 @@ Run:
         \* Maybe create a new behaviour
         if message_fuel > 0 then
           either
-            with new_msg \in Subsets(Cowns, 1, 3), next = Min(new_msg) do
+            with
+              new_msg \in Subsets(Cowns, 1, 3),
+              next = Min(new_msg),
+              protect = \E c \in new_msg: HasPriority(c),
+              state__ = IF protect THEN Unmute(new_msg, state_) ELSE state_,
+            do
               queue := (next :> Append(queue_[next], new_msg)) @@ queue_;
-              \* Mute if receiver triggers muting
+              \* Protect receivers if any have priority.
+              if protect then
+                protected := [c \in new_msg |-> TRUE] @@ protected;
+              end if;
+              \* Mute if receiver triggers muting and running cowns are mutable
               if TriggersMuting(next)
                 /\ (running \notin new_msg)
-                /\ (state[running] /= Overloaded)
+                /\ ~HasPriority(running)
               then
-                state := (running :> Muted) @@ state_;
+                state := (running :> Muted) @@ state__;
                 mute_map :=
                   (next :> mute_map[next] \union {running}) @@ mute_map;
               else
-                state := state_;
+                state := state__;
               end if;
             end with;
             message_fuel := message_fuel - 1;
