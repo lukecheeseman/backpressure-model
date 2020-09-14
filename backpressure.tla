@@ -9,13 +9,13 @@ Goals:
   queue of a muted cown
 *)
 
-CONSTANTS Null, Normal, Overloaded
-MessageLimit == 5
-Cowns == 1..5
+CONSTANTS Null, Normal, Overloaded, Muted
+MessageLimit == 3
+Cowns == 1..4
 Schedulers == 1..3
 
-\* Range(f) == {f[x]: x \in DOMAIN f}
 \* Intersects(a, b) == a \intersect b /= {}
+Range(f) == {f[x]: x \in DOMAIN f}
 Min(s) == CHOOSE x \in s: \A y \in s \ {x}: y > x
 Max(s) == CHOOSE x \in s: \A y \in s \ {x}: y < x
 Subsets(s, min, max) ==
@@ -30,8 +30,7 @@ ReduceSet(op(_, _), set, acc) ==
 
 variables
   message_fuel = MessageLimit,
-  initial_msg \in {cowns \in Subsets(Cowns, 1, 3): TRUE},
-  queue = (Min(initial_msg) :> <<initial_msg>>) @@ [c \in Cowns |-> <<>>],
+  queue = [c \in Cowns |-> <<{c}>>],
   acquired = [c \in Cowns |-> FALSE],
   state = [c \in Cowns |-> Normal],
 
@@ -39,6 +38,7 @@ define
   Sleeping(cown) == (queue[cown] = <<>>) /\ ~acquired[cown]
   Available(cown) == (queue[cown] /= <<>>) /\ ~acquired[cown]
   Quiescent(cowns) == \A c \in cowns: Sleeping(c)
+  TriggersMuting(cown) == state[cown] \in {Overloaded, Muted}
   RefCount(cown) ==
     LET RC(q, c) == Cardinality({i \in DOMAIN q: c \in q[i]})
     IN ReduceSet(LAMBDA c, sum: sum + RC(queue[c], cown), Cowns, 0)
@@ -76,25 +76,35 @@ Run:
         queue := (next :> Append(queue[next], msg)) @@ queue_;
       end with;
     else
-      \* Maybe create a new behaviour
-      if message_fuel > 0 then
-        either
-          with new_msg \in Subsets(Cowns, 1, 3), next = Min(new_msg) do
-            queue := (next :> Append(queue_[next], new_msg)) @@ queue_;
-          end with;
-          message_fuel := message_fuel - 1;
-        or queue := queue_;
-        end either;
-      else queue := queue_;
-      end if;
-      \* Any acquired cown with more messages in its queue may toggle their
-      \* state to overloaded. Acquired cowns with an empty queue will become
-      \* normal.
-      with overload \in SUBSET {c \in msg: queue_[c] /= <<>>} do
-        state :=
-          [c \in overload |-> Overloaded] @@ [c \in msg |-> Normal] @@ state;
+      with
+        \* Any acquired cown with more messages in its queue may toggle their
+        \* state to overloaded. Acquired cowns with an empty queue will become
+        \* normal.
+        overload \in SUBSET {c \in msg: queue_[c] /= <<>>},
+        state_ =
+          [c \in overload |-> Overloaded] @@ [c \in msg |-> Normal] @@ state,
+      do
+        \* Maybe create a new behaviour
+        if message_fuel > 0 then
+          either
+            with new_msg \in Subsets(Cowns, 1, 3), next = Min(new_msg) do
+              queue := (next :> Append(queue_[next], new_msg)) @@ queue_;
+              \* Mute if receiver triggers muting
+              \* if TriggersMuting(next) then
+              \*   state := (running :> Muted) @@ state_;
+              \* end if;
+              state := state_;
+            end with;
+            message_fuel := message_fuel - 1;
+          or
+            queue := queue_;
+            state := state_;
+          end either;
+        else
+          queue := queue_;
+          state := state_;
+        end if;
       end with;
-      \* TODO: mute
       \* Release any acquired cowns from this behaviour.
       acquired := [c \in msg |-> FALSE] @@ acquired;
     end if;
@@ -107,5 +117,7 @@ end process;
 end algorithm; *)
 
 Completion == (\A sched \in Schedulers: pc[sched] = "Done") => Quiescent(Cowns)
+MutedCownNotRunning ==
+  \A c \in Range(running): (c = Null) \/ (state[c] /= Muted)
 
 ====
