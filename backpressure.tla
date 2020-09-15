@@ -4,7 +4,7 @@ EXTENDS FiniteSets, Naturals, Sequences, TLC
 
 (*
 Goals:
-- Qiuescence is reached
+- Quiescence is reached
 - A message that has acquired an overloaded cown will never be placed on the
   queue of a muted cown
 *)
