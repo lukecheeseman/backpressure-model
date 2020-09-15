@@ -11,7 +11,7 @@ Goals:
 
 CONSTANTS Null, Normal, Overloaded, Muted
 MessageLimit == 3
-Cowns == 1..4
+Cowns == 1..3 \* TODO: 1..4
 Schedulers == 1..3
 
 \* Intersects(a, b) == a \intersect b /= {}
@@ -69,14 +69,18 @@ Acquire:
     \* Unmute the muted range of all invalid keys.
     unmuting =
       {c \in UNION Range([k \in keys |-> mute_map[k]]): state[c] = Muted},
-  do
     \* Delete entries and unmute.
-    mute_map := [k \in keys |-> {}] @@ mute_map;
+    mute_map_ = [k \in keys |-> {}] @@ mute_map,
+  do
     state := Unmute(unmuting, state);
-
-    await (\E c \in Cowns: Available(c)) \/ Quiescent(Cowns);
+    await (\E c \in Cowns: Available(c)) \/ Quiescent(Cowns)
+      \/ (\E k \in Cowns: (mute_map[k] /= {}) /\ ~TriggersMuting(k));
+    mute_map := mute_map_;
     if Quiescent(Cowns) then
       goto Done;
+    elsif \A c \in Cowns: ~Available(c) then
+      \* Rescan mute map.
+      goto Acquire;
     else
       with c \in {c \in Cowns: Available(c)} do running := c; end with;
       acquired := (running :> TRUE) @@ acquired;
