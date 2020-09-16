@@ -55,13 +55,12 @@ Acquire:
 
 Action:
   \* Any cowns cown may toggle their overloaded state when the behaviour completes.
+  \* The checks for cowns in pending behaviours are artificial constraints
   with overload \in SUBSET {c \in cowns: \E b \in Behaviours : c \in pending[b]},
-       \* unoverload some subset cowns that we won't overload that are overloaded,
-       \* but must contain any overloaded cown that we use that has no more pending behaviours
-       \* unoverload \in {us \in SUBSET ((cowns \ overload) \intersect overloaded): \A c \in cowns: (\A b \in Behaviours: c \notin pending[b]) => c \in us},
-       unoverload \in SUBSET ((cowns \ overload) \intersect overloaded),
+       unoverload \in {cs \in SUBSET cowns: (cs \subseteq ((cowns \ overload) \intersect overloaded)) /\
+                                            \A c \in (cowns \intersect overloaded): ~(\E b \in Behaviours: c \in pending[b]) => c \in cs},
        unmute = UNION {mute_map[c] : c \in unoverload}
-  do 
+  do
     overloaded := (overloaded \ unoverload) \union overload;
   
     with receiver \in Cowns, mute = {c \in cowns: c \notin overloaded} do
@@ -70,19 +69,19 @@ Action:
         \* Add muted senders to the mute map entry for the receiver.
         unavailable := (unavailable \union mute) \ unmute;
         available := available \union (cowns \ mute) \union unmute;
-        mute_map := (receiver :> mute_map[receiver] \union mute) @@ [m \in unmute |-> {} ] @@ mute_map;
+        mute_map := (receiver :> mute_map[receiver] \union mute) @@ [m \in unoverload |-> {} ] @@ mute_map;
       else      
         \* Senders are not muted, so all become available.
         unavailable := unavailable \ unmute;
         available := available \union cowns \union unmute;
-        mute_map := [m \in unmute |-> {} ] @@ mute_map;
+        mute_map := [m \in unoverload |-> {} ] @@ mute_map;
       end if;
     end with;
   end with;
 end process;
 
 end algorithm; *)
-\* BEGIN TRANSLATION - the hash of the PCal code: PCal-68b44a9377a5d45061e8e6e93b0ce86f
+\* BEGIN TRANSLATION - the hash of the PCal code: PCal-6505cd2027a9996317597364065fa3c8
 VARIABLES pending, available, unavailable, overloaded, mute_map, pc
 
 (* define statement *)
@@ -133,7 +132,8 @@ Acquire(self) == /\ pc[self] = "Acquire"
 
 Action(self) == /\ pc[self] = "Action"
                 /\ \E overload \in SUBSET {c \in cowns[self]: \E b \in Behaviours : c \in pending[b]}:
-                     \E unoverload \in SUBSET ((cowns[self] \ overload) \intersect overloaded):
+                     \E unoverload \in {cs \in SUBSET cowns[self]: (cs \subseteq ((cowns[self] \ overload) \intersect overloaded)) /\
+                                                                   \A c \in (cowns[self] \intersect overloaded): ~(\E b \in Behaviours: c \in pending[b]) => c \in cs}:
                        LET unmute == UNION {mute_map[c] : c \in unoverload} IN
                          /\ overloaded' = ((overloaded \ unoverload) \union overload)
                          /\ \E receiver \in Cowns:
@@ -141,10 +141,10 @@ Action(self) == /\ pc[self] = "Action"
                                 IF receiver \in {c \in Cowns: (\E b \in Behaviours: c \in pending[b]) /\ c \in ((overloaded' \union unavailable) \ cowns[self])}
                                    THEN /\ unavailable' = (unavailable \union mute) \ unmute
                                         /\ available' = (available \union (cowns[self] \ mute) \union unmute)
-                                        /\ mute_map' = (receiver :> mute_map[receiver] \union mute) @@ [m \in unmute |-> {} ] @@ mute_map
+                                        /\ mute_map' = (receiver :> mute_map[receiver] \union mute) @@ [m \in unoverload |-> {} ] @@ mute_map
                                    ELSE /\ unavailable' = unavailable \ unmute
                                         /\ available' = (available \union cowns[self] \union unmute)
-                                        /\ mute_map' = [m \in unmute |-> {} ] @@ mute_map
+                                        /\ mute_map' = [m \in unoverload |-> {} ] @@ mute_map
                 /\ pc' = [pc EXCEPT ![self] = "Done"]
                 /\ UNCHANGED << pending, cowns >>
 
@@ -162,7 +162,7 @@ Spec == /\ Init /\ [][Next]_vars
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
-\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-5b3dabdef565cb7e04ccd4007128486f
+\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-162131ba7366187323c00f22456302ac
 
 ====
 
