@@ -58,25 +58,32 @@ Action:
   do
     overloaded := (overloaded \ unoverload) \union overload;
   
-    with receiver \in Cowns, mute = {c \in cowns: c \notin overloaded} do
-      \* Mute senders if the receiver triggers muting and the receiver isn't one of the senders.
-      if receiver \in {c \in Cowns: (\E b \in Behaviours: c \in pending[b]) /\ c \in ((overloaded \union unavailable) \ cowns)} then
-        \* Add muted senders to the mute map entry for the receiver.
-        unavailable := (unavailable \union mute) \ unmute;
-        available := available \union (cowns \ mute) \union unmute;
-        mute_map := (receiver :> mute_map[receiver] \union mute) @@ [m \in unoverload |-> {} ] @@ mute_map;
-      else      
-        \* Senders are not muted, so all become available.
-        unavailable := unavailable \ unmute;
-        available := available \union cowns \union unmute;
-        mute_map := [m \in unoverload |-> {} ] @@ mute_map;
-      end if;
-    end with;
+    either
+      \* No new behaviour is created
+      unavailable := unavailable \ unmute;
+      available := available \union cowns \union unmute;
+      mute_map := [m \in unoverload |-> {} ] @@ mute_map;
+    or   
+      with receiver \in Cowns, mute = {c \in cowns: c \notin overloaded} do
+        \* Mute senders if the receiver triggers muting and the receiver isn't one of the senders.
+        if receiver \in {c \in Cowns: (\E b \in Behaviours: c \in pending[b]) /\ c \in ((overloaded \union unavailable) \ cowns)} then
+          \* Add muted senders to the mute map entry for the receiver.
+          unavailable := (unavailable \union mute) \ unmute;
+          available := available \union (cowns \ mute) \union unmute;
+          mute_map := (receiver :> mute_map[receiver] \union mute) @@ [m \in unoverload |-> {} ] @@ mute_map;
+        else      
+          \* Senders are not muted, so all become available.
+          unavailable := unavailable \ unmute;
+          available := available \union cowns \union unmute;
+          mute_map := [m \in unoverload |-> {} ] @@ mute_map;
+        end if;
+      end with;
+    end either;
   end with;
 end process;
 
 end algorithm; *)
-\* BEGIN TRANSLATION - the hash of the PCal code: PCal-5c36600a11111e425a922962e903ef5c
+\* BEGIN TRANSLATION - the hash of the PCal code: PCal-3ec03028d8853635d9073c42b6495ced
 VARIABLES pending, available, unavailable, overloaded, mute_map, pc
 
 (* define statement *)
@@ -127,15 +134,18 @@ Action(self) == /\ pc[self] = "Action"
                      \E unoverload \in SUBSET ((cowns[self] \ overload) \intersect overloaded):
                        LET unmute == UNION {mute_map[c] : c \in unoverload} IN
                          /\ overloaded' = ((overloaded \ unoverload) \union overload)
-                         /\ \E receiver \in Cowns:
-                              LET mute == {c \in cowns[self]: c \notin overloaded'} IN
-                                IF receiver \in {c \in Cowns: (\E b \in Behaviours: c \in pending[b]) /\ c \in ((overloaded' \union unavailable) \ cowns[self])}
-                                   THEN /\ unavailable' = (unavailable \union mute) \ unmute
-                                        /\ available' = (available \union (cowns[self] \ mute) \union unmute)
-                                        /\ mute_map' = (receiver :> mute_map[receiver] \union mute) @@ [m \in unoverload |-> {} ] @@ mute_map
-                                   ELSE /\ unavailable' = unavailable \ unmute
-                                        /\ available' = (available \union cowns[self] \union unmute)
-                                        /\ mute_map' = [m \in unoverload |-> {} ] @@ mute_map
+                         /\ \/ /\ unavailable' = unavailable \ unmute
+                               /\ available' = (available \union cowns[self] \union unmute)
+                               /\ mute_map' = [m \in unoverload |-> {} ] @@ mute_map
+                            \/ /\ \E receiver \in Cowns:
+                                    LET mute == {c \in cowns[self]: c \notin overloaded'} IN
+                                      IF receiver \in {c \in Cowns: (\E b \in Behaviours: c \in pending[b]) /\ c \in ((overloaded' \union unavailable) \ cowns[self])}
+                                         THEN /\ unavailable' = (unavailable \union mute) \ unmute
+                                              /\ available' = (available \union (cowns[self] \ mute) \union unmute)
+                                              /\ mute_map' = (receiver :> mute_map[receiver] \union mute) @@ [m \in unoverload |-> {} ] @@ mute_map
+                                         ELSE /\ unavailable' = unavailable \ unmute
+                                              /\ available' = (available \union cowns[self] \union unmute)
+                                              /\ mute_map' = [m \in unoverload |-> {} ] @@ mute_map
                 /\ pc' = [pc EXCEPT ![self] = "Done"]
                 /\ UNCHANGED << pending, cowns >>
 
@@ -153,7 +163,7 @@ Spec == /\ Init /\ [][Next]_vars
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
-\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-fcee8c8ccf6983438bf088dad6a81223
+\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-8bf6e47fb6237443b45629b37167b177
 
 ====
 
