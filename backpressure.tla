@@ -46,6 +46,8 @@ define
   Quiescent(cowns) == \A c \in cowns: Sleeping(c)
   TriggersMuting(cown) == state[cown] \in {Overloaded, Muted}
   HasPriority(cown) == (state[cown] = Overloaded) \/ protected[cown]
+  Dequeue(cown) == (cown :> Tail(queue[cown])) @@ queue
+  Send(cown, msg, q) == (cown :> Append(q[cown], msg)) @@ q
   Unmute(cowns, st) == [c \in {c \in cowns: st[c] = Muted} |-> Normal] @@ st
   RefCount(cown) ==
     LET RC(q, c) == Cardinality({i \in DOMAIN q: c \in q[i]})
@@ -91,8 +93,6 @@ Run:
   with
     \* Pop the head of its message queue
     msg = Head(queue[running]),
-    \* Dequeue msg
-    queue_ = (running :> Tail(queue[running])) @@ queue,
   do
     assert running \in msg;
     assert \A c \in msg: acquired[c] \/ (c > running);
@@ -100,7 +100,7 @@ Run:
     if running < Max(msg) then
       \* Forward message to the next cown.
       with next = Min({c \in msg: c > running}) do
-        queue := (next :> Append(queue[next], msg)) @@ queue_;
+        queue := Send(next, msg, Dequeue(running));
       end with;
       \* Protect receivers if any have priority.
       if \E c \in msg: HasPriority(c) then
@@ -108,50 +108,52 @@ Run:
         protected := [c \in msg |-> TRUE] @@ protected;
       end if;
     else
-      with
-        \* Any acquired cown with more messages in its queue may toggle their
-        \* state to overloaded. Acquired cowns with an empty queue will become
-        \* normal.
-        overload \in SUBSET {c \in msg: queue_[c] /= <<>>},
-        state_ =
-          [c \in overload |-> Overloaded] @@ [c \in msg |-> Normal] @@ state,
-      do
-        \* Maybe create a new behaviour
-        if message_fuel > 0 then
-          either
-            with
-              new_msg \in Subsets(Cowns, 1, 3),
-              next = Min(new_msg),
-              protect = \E c \in new_msg: HasPriority(c),
-              state__ = IF protect THEN Unmute(new_msg, state_) ELSE state_,
-            do
-              queue := (next :> Append(queue_[next], new_msg)) @@ queue_;
-              \* Protect receivers if any have priority.
-              if protect then
-                protected := [c \in new_msg |-> TRUE] @@ protected;
-              end if;
-              \* Mute if receiver triggers muting and running cowns are mutable
-              if TriggersMuting(next)
-                /\ (running \notin new_msg)
-                /\ ~HasPriority(running)
-              then
-                state := (running :> Muted) @@ state__;
-                mute_map :=
-                  (next :> mute_map[next] \union {running}) @@ mute_map;
-              else
-                state := state__;
-              end if;
-            end with;
-            message_fuel := message_fuel - 1;
-          or
-            queue := queue_;
-            state := state_;
-          end either;
-        else
-          queue := queue_;
-          state := state_;
-        end if;
-      end with;
+      \* Any acquired cown with more messages in its queue may toggle
+      \* state to overloaded. Acquired cowns with an empty queue will become
+      \* normal.
+
+      \* Maybe create a new behaviour
+      either
+        \* Disable this branch if zero fuel
+        await message_fuel > 0;
+        with
+          queue_ = Dequeue(running),
+          overloading \in SUBSET {c \in msg: queue_[c] /= <<>>},
+          state_ =
+            [c \in overloading |-> Overloaded] @@ [c \in msg |-> Normal] @@ state,
+          \* mutable = {c \in cown: ~HasPriority(c) /\ (c \in overloading)},
+
+          new_msg \in Subsets(Cowns, 1, 3),
+          next = Min(new_msg),
+          protect = \E c \in new_msg: HasPriority(c),
+          state__ = IF protect THEN Unmute(new_msg, state_) ELSE state_,
+        do
+          queue := Send(next, new_msg, Dequeue(running));
+          \* Protect receivers if any have priority.
+          if protect then
+            protected := [c \in new_msg |-> TRUE] @@ protected;
+          end if;
+          \* Mute if receiver triggers muting and running cowns are mutable
+          if TriggersMuting(next)
+            /\ (running \notin new_msg)
+            /\ ~HasPriority(running)
+          then
+            state := (running :> Muted) @@ state__;
+            mute_map :=
+              (next :> mute_map[next] \union {running}) @@ mute_map;
+          else
+            state := state__;
+          end if;
+        end with;
+        message_fuel := message_fuel - 1;
+      or
+        queue := Dequeue(running);
+        with overloading \in SUBSET {c \in msg: queue[c] /= <<>>} do
+          state :=
+            [c \in overloading |-> Overloaded] @@
+            [c \in msg |-> Normal] @@ state;
+        end with;
+      end either;
       \* Release any acquired cowns from this behaviour.
       acquired := [c \in msg |-> FALSE] @@ acquired;
     end if;
