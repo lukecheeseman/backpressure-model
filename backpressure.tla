@@ -64,30 +64,28 @@ variables
   running = Null,
   mute_map = [c \in Cowns |-> {}],
 begin
-Acquire:
-  with
-    \* Invalid keys have a zero refcount or no longer trigger muting.
-    keys = {c \in Cowns: (RefCount(c) = 0) \/ ~TriggersMuting(c)},
-    \* Unmute the muted range of all invalid keys.
-    unmuting =
-      {c \in UNION Range([k \in keys |-> mute_map[k]]): state[c] = Muted},
-    \* Delete entries and unmute.
-    mute_map_ = [k \in keys |-> {}] @@ mute_map,
-  do
-    state := Unmute(unmuting, state);
-    await (\E c \in Cowns: Available(c)) \/ Quiescent(Cowns)
-      \/ (\E k \in Cowns: (mute_map[k] /= {}) /\ ~TriggersMuting(k));
-    mute_map := mute_map_;
-    if Quiescent(Cowns) then
-      goto Done;
-    elsif \A c \in Cowns: ~Available(c) then
-      \* Rescan mute map.
-      goto Acquire;
-    else
-      with c \in {c \in Cowns: Available(c)} do running := c; end with;
-      acquired := (running :> TRUE) @@ acquired;
-    end if;
-  end with;
+Prerun:
+  if Quiescent(Cowns) then
+    \* Shutdown
+    goto Done;
+  elsif \E c \in Cowns: Available(c) then
+    \* Acquire an available cown
+    with c \in {c \in Cowns: Available(c)} do running := c; end with;
+    acquired := (running :> TRUE) @@ acquired;
+  else
+    \* Scan mute map.
+    with
+      \* Invalid keys have a zero refcount or no longer trigger muting.
+      keys = {c \in Cowns: (RefCount(c) = 0) \/ ~TriggersMuting(c)},
+      \* Unmute the muted range of all invalid keys.
+      unmuting =
+        {c \in UNION Range([k \in keys |-> mute_map[k]]): state[c] = Muted},
+    do
+      state := Unmute(unmuting, state);
+      mute_map := [k \in keys |-> {}] @@ mute_map;
+      goto Prerun;
+    end with;
+  end if;
 
 Run:
   with
@@ -108,9 +106,8 @@ Run:
         protected := [c \in msg |-> TRUE] @@ protected;
       end if;
     else
-      \* Any acquired cown with more messages in its queue may toggle
-      \* state to overloaded. Acquired cowns with an empty queue will become
-      \* normal.
+      \* Any acquired cown with more messages in its queue may toggle to
+      \* overloaded. Acquired cowns with an empty queue will become normal.
 
       \* Maybe create a new behaviour
       either
@@ -120,7 +117,8 @@ Run:
           queue_ = Dequeue(running),
           overloading \in SUBSET {c \in msg: queue_[c] /= <<>>},
           state_ =
-            [c \in overloading |-> Overloaded] @@ [c \in msg |-> Normal] @@ state,
+            [c \in overloading |-> Overloaded] @@
+            [c \in msg |-> Normal] @@ state,
           \* mutable = {c \in cown: ~HasPriority(c) /\ (c \in overloading)},
 
           new_msg \in Subsets(Cowns, 1, 3),
@@ -159,7 +157,7 @@ Run:
     end if;
 
     running := Null;
-    goto Acquire;
+    goto Prerun;
   end with;
 end process;
 
