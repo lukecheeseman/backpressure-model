@@ -11,16 +11,19 @@ Range(f) == { f[x] : x \in DOMAIN f }
 (* --algorithm backpressure
 
 variables
+  \* Cowns available for running behaviours
+  available = Cowns,
+  \* Mapping of mutor to unavailable
+  mute_map = [c \in Cowns |-> {}],
   \* Mapping of behaviour to required cown
   required = [b \in Behaviours |-> {}],
   \* Mapping of behaviour to acquired cown
   acquired = [b \in Behaviours |-> {}],
-  \* Cowns available for running behaviours
-  available = Cowns,
+  \* Mapping of behaviour to muting cown
+  gobble = [b \in Behaviours |-> 0],
+  
   \* Cowns that are overloaded
   overloaded = {},
-  \* Mapping of mutor to unavailable
-  mute_map = [c \in Cowns |-> {}],
 
 define
   \* unavailable cowns must not be available, overloaded, or protected.
@@ -33,7 +36,7 @@ define
   \* All invalid mute map entries will eventually be removed.
   MuteMapProp ==
     []<>(\A k \in DOMAIN mute_map: mute_map[k] = {} \/ k \in overloaded)
-    end define;
+end define;
 
 fair process behaviour \in Behaviours
 variables
@@ -63,39 +66,47 @@ Acquire:
   end while;
   
 Send:
+  either
+    \* No new behaviour is created
+    skip;
+  or   
+    with receiver \in Cowns, mute = acquired[self] \ overloaded do
+      \* Mute senders if the receiver triggers muting and the receiver isn't one of the senders.
+      if (receiver \in (overloaded \union UNION Range(mute_map)) \ acquired[self]) /\ (\E b \in Behaviours: receiver \in required[b]) then
+        \* Add muted senders to the mute map entry for the receiver.
+        gobble[self] := receiver;
+      else      
+        \* Senders are not muted, so all become available.
+        skip;
+      end if;
+    end with;
+  end either;
+
+Terminate:
   \* Any cowns cown may toggle their overloaded state when the behaviour completes.
   with overload \in SUBSET acquired[self],
        unoverload \in SUBSET ((acquired[self] \ overload) \intersect overloaded),
        unmute = UNION {mute_map[c] : c \in unoverload}
   do
     overloaded := (overloaded \ unoverload) \union overload;
-  
-    either
-      \* No new behaviour is created
+    
+    if gobble[self] \in overloaded then
+      with receiver = gobble[self], mute = acquired[self] \ overloaded  do
+        available := available \union (acquired[self] \ mute) \union unmute;
+        mute_map := (receiver :> mute_map[gobble[self]] \union mute) @@ [m \in unoverload |-> {} ] @@ mute_map;
+      end with; 
+    else
       available := available \union acquired[self] \union unmute;
       mute_map := [m \in unoverload |-> {} ] @@ mute_map;
-    or   
-      with receiver \in Cowns, mute = acquired[self] \ overloaded do
-        \* Mute senders if the receiver triggers muting and the receiver isn't one of the senders.
-        if (receiver \in (overloaded \union UNION Range(mute_map)) \ acquired[self]) /\ (\E b \in Behaviours: receiver \in required[b]) then
-          \* Add muted senders to the mute map entry for the receiver.
-          available := available \union (acquired[self] \ mute) \union unmute;
-          mute_map := (receiver :> mute_map[receiver] \union mute) @@ [m \in unoverload |-> {} ] @@ mute_map;
-        else      
-          \* Senders are not muted, so all become available.
-          available := available \union acquired[self] \union unmute;
-          mute_map := [m \in unoverload |-> {} ] @@ mute_map;
-        end if;
-      end with;
-    end either;
+    end if;
   end with;
-  
+ 
   acquired[self] := {}
 end process;
 
 end algorithm; *)
-\* BEGIN TRANSLATION - the hash of the PCal code: PCal-7b36a9d496ae24e42e078f2bb8aa04f1
-VARIABLES required, acquired, available, overloaded, mute_map, pc
+\* BEGIN TRANSLATION - the hash of the PCal code: PCal-e47908388deea04c1a66be9ca9c8c984
+VARIABLES available, mute_map, required, acquired, gobble, overloaded, pc
 
 (* define statement *)
 UnavailableInv == ((UNION Range(mute_map)) \intersect (available \union overloaded)) = {}
@@ -110,16 +121,18 @@ MuteMapProp ==
 
 VARIABLE cowns
 
-vars == << required, acquired, available, overloaded, mute_map, pc, cowns >>
+vars == << available, mute_map, required, acquired, gobble, overloaded, pc, 
+           cowns >>
 
 ProcSet == (Behaviours)
 
 Init == (* Global variables *)
+        /\ available = Cowns
+        /\ mute_map = [c \in Cowns |-> {}]
         /\ required = [b \in Behaviours |-> {}]
         /\ acquired = [b \in Behaviours |-> {}]
-        /\ available = Cowns
+        /\ gobble = [b \in Behaviours |-> 0]
         /\ overloaded = {}
-        /\ mute_map = [c \in Cowns |-> {}]
         (* Process behaviour *)
         /\ cowns \in [Behaviours -> SUBSET Cowns]
         /\ pc = [self \in ProcSet |-> "Create"]
@@ -127,8 +140,8 @@ Init == (* Global variables *)
 Create(self) == /\ pc[self] = "Create"
                 /\ required' = [required EXCEPT ![self] = cowns[self]]
                 /\ pc' = [pc EXCEPT ![self] = "Acquire"]
-                /\ UNCHANGED << acquired, available, overloaded, mute_map, 
-                                cowns >>
+                /\ UNCHANGED << available, mute_map, acquired, gobble, 
+                                overloaded, cowns >>
 
 Acquire(self) == /\ pc[self] = "Acquire"
                  /\ IF required[self] /= {}
@@ -140,36 +153,48 @@ Acquire(self) == /\ pc[self] = "Acquire"
                                             /\ acquired' = [acquired EXCEPT ![self] = acquired[self] \union {next}]
                                             /\ UNCHANGED mute_map
                                        ELSE /\ Assert((\E c \in (required[self] \union acquired[self]): c \in overloaded /\ next \in UNION Range(mute_map)), 
-                                                      "Failure of assertion at line 56, column 9.")
+                                                      "Failure of assertion at line 59, column 9.")
                                             /\ LET c == CHOOSE c \in Cowns: next \in mute_map[c] IN
                                                  /\ mute_map' = [mute_map EXCEPT ![c] = mute_map[c] \ {next}]
                                                  /\ available' = (available \union {next})
                                             /\ UNCHANGED << required, acquired >>
                             /\ pc' = [pc EXCEPT ![self] = "Acquire"]
                        ELSE /\ pc' = [pc EXCEPT ![self] = "Send"]
-                            /\ UNCHANGED << required, acquired, available, 
-                                            mute_map >>
-                 /\ UNCHANGED << overloaded, cowns >>
+                            /\ UNCHANGED << available, mute_map, required, 
+                                            acquired >>
+                 /\ UNCHANGED << gobble, overloaded, cowns >>
 
 Send(self) == /\ pc[self] = "Send"
-              /\ \E overload \in SUBSET acquired[self]:
-                   \E unoverload \in SUBSET ((acquired[self] \ overload) \intersect overloaded):
-                     LET unmute == UNION {mute_map[c] : c \in unoverload} IN
-                       /\ overloaded' = ((overloaded \ unoverload) \union overload)
-                       /\ \/ /\ available' = (available \union acquired[self] \union unmute)
-                             /\ mute_map' = [m \in unoverload |-> {} ] @@ mute_map
-                          \/ /\ \E receiver \in Cowns:
-                                  LET mute == acquired[self] \ overloaded' IN
-                                    IF (receiver \in (overloaded' \union UNION Range(mute_map)) \ acquired[self]) /\ (\E b \in Behaviours: receiver \in required[b])
-                                       THEN /\ available' = (available \union (acquired[self] \ mute) \union unmute)
-                                            /\ mute_map' = (receiver :> mute_map[receiver] \union mute) @@ [m \in unoverload |-> {} ] @@ mute_map
-                                       ELSE /\ available' = (available \union acquired[self] \union unmute)
-                                            /\ mute_map' = [m \in unoverload |-> {} ] @@ mute_map
-              /\ acquired' = [acquired EXCEPT ![self] = {}]
-              /\ pc' = [pc EXCEPT ![self] = "Done"]
-              /\ UNCHANGED << required, cowns >>
+              /\ \/ /\ TRUE
+                    /\ UNCHANGED gobble
+                 \/ /\ \E receiver \in Cowns:
+                         LET mute == acquired[self] \ overloaded IN
+                           IF (receiver \in (overloaded \union UNION Range(mute_map)) \ acquired[self]) /\ (\E b \in Behaviours: receiver \in required[b])
+                              THEN /\ gobble' = [gobble EXCEPT ![self] = receiver]
+                              ELSE /\ TRUE
+                                   /\ UNCHANGED gobble
+              /\ pc' = [pc EXCEPT ![self] = "Terminate"]
+              /\ UNCHANGED << available, mute_map, required, acquired, 
+                              overloaded, cowns >>
+
+Terminate(self) == /\ pc[self] = "Terminate"
+                   /\ \E overload \in SUBSET acquired[self]:
+                        \E unoverload \in SUBSET ((acquired[self] \ overload) \intersect overloaded):
+                          LET unmute == UNION {mute_map[c] : c \in unoverload} IN
+                            /\ overloaded' = ((overloaded \ unoverload) \union overload)
+                            /\ IF gobble[self] \in overloaded'
+                                  THEN /\ LET receiver == gobble[self] IN
+                                            LET mute == acquired[self] \ overloaded' IN
+                                              /\ available' = (available \union (acquired[self] \ mute) \union unmute)
+                                              /\ mute_map' = (receiver :> mute_map[gobble[self]] \union mute) @@ [m \in unoverload |-> {} ] @@ mute_map
+                                  ELSE /\ available' = (available \union acquired[self] \union unmute)
+                                       /\ mute_map' = [m \in unoverload |-> {} ] @@ mute_map
+                   /\ acquired' = [acquired EXCEPT ![self] = {}]
+                   /\ pc' = [pc EXCEPT ![self] = "Done"]
+                   /\ UNCHANGED << required, gobble, cowns >>
 
 behaviour(self) == Create(self) \/ Acquire(self) \/ Send(self)
+                      \/ Terminate(self)
 
 (* Allow infinite stuttering to prevent deadlock on termination. *)
 Terminating == /\ \A self \in ProcSet: pc[self] = "Done"
@@ -183,7 +208,7 @@ Spec == /\ Init /\ [][Next]_vars
 
 Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
-\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-7acb344aa279a33ed248de06356c08c1
+\* END TRANSLATION - the hash of the generated TLA code (remove to silence divergence warnings): TLA-b2184c921e6863cb657ebf68e21b9508
 
 ====
 
