@@ -34,6 +34,7 @@ variables
   acquired = [c \in Cowns |-> FALSE],
   state = [c \in Cowns |-> Normal],
   protected = [c \in Cowns |-> FALSE],
+  next_acq = [c \in Cowns |-> Null],
 
 define
   Sleeping(cown)
@@ -99,6 +100,7 @@ Run:
       \* Forward message to the next cown.
       with next = Min({c \in msg: c > running}) do
         queue := Send(next, msg, Dequeue(running));
+        next_acq := (running :> next) @@ next_acq;
       end with;
       \* Protect receivers if any have priority.
       if \E c \in msg: HasPriority(c) then
@@ -152,6 +154,7 @@ Run:
             [c \in msg |-> Normal] @@ state;
         end with;
       end either;
+      next_acq := (running :> Null) @@ next_acq;
       \* Release any acquired cowns from this behaviour.
       acquired := [c \in msg |-> FALSE] @@ acquired;
     end if;
