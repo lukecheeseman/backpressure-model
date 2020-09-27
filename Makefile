@@ -2,6 +2,7 @@
 NPROC ?= $(shell nproc)
 TLC_JAVA_OPTS ?= -XX:+UseParallelGC
 TLC_OPTS ?= -workers $(NPROC)
+	# -debug -coverage 1
 
 .PHONY: all clean
 
@@ -15,7 +16,6 @@ build/report.txt: build/backpressure.tla build/backpressure.cfg
 build/backpressure.tla: backpressure.tla backpressure.cfg
 	mkdir -p build
 	cp -f backpressure.tla backpressure.cfg build/
-	pcal $@
 
 clean:
 	rm -rf build/
