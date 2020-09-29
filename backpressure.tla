@@ -18,8 +18,8 @@ ReduceSet(op(_, _), set, acc) ==
     IF s = {} THEN acc ELSE LET x == Pick(s) IN op(x, f[s \ {x}])
   IN f[set]
 
-VARIABLES fuel, queue, scheduled, mute, mutor, protected
-vars == <<fuel, queue, scheduled, mute, mutor, protected>>
+VARIABLES fuel, queue, scheduled, mute, mutor, protected, blocker
+vars == <<fuel, queue, scheduled, mute, mutor, protected, blocker>>
 
 Sleeping(c) == scheduled[c] /\ (Len(queue[c]) = 0)
 Available(c) == scheduled[c] /\ (Len(queue[c]) > 0)
@@ -39,6 +39,7 @@ Init ==
   /\ mute = [c \in Cowns |-> {}]
   /\ mutor = [c \in Cowns |-> Null]
   /\ protected = [c \in Cowns |-> FALSE]
+  /\ blocker = [c \in Cowns |-> Null]
 
 Terminating ==
   /\ \A c \in Cowns: Sleeping(c)
@@ -50,7 +51,8 @@ Acquire(cown) ==
     /\ cown < Max(msg)
     /\ LET next == Min({c \in msg: c > cown}) IN
       LET q == (cown :> Tail(queue[cown])) @@ queue IN
-      queue' = (next :> Append(queue[next], msg)) @@ q
+      /\ queue' = (next :> Append(queue[next], msg)) @@ q
+      /\ blocker' = (cown :> next) @@ blocker
     /\ IF \E c \in msg: TriggersProtection(c) THEN
         LET p == {c \in msg: c > cown} IN
         /\ protected' = [c \in p |-> TRUE] @@ protected
@@ -78,18 +80,19 @@ Send(cown) ==
     /\ ScanMsg(cown, Head(queue[cown]), msg)
     /\ queue' = (Min(msg) :> Append(queue[Min(msg)], msg)) @@ queue
   /\ fuel' = fuel - 1
-  /\ UNCHANGED <<scheduled, mute, protected>>
+  /\ UNCHANGED <<scheduled, mute, protected, blocker>>
 
 Complete(cown) ==
   /\ Running(cown)
   /\ LET msg == Head(queue[cown]) IN
-    IF mutor[cown] /= Null THEN
+    /\ IF mutor[cown] /= Null THEN
       LET muting == {c \in msg: ~TriggersProtection(c)} IN
-      /\ scheduled' = [c \in msg |-> c \notin muting] @@ scheduled
-      /\ mute' = (mutor[cown] :> mute[mutor[cown]] \union muting) @@ mute
-    ELSE
-      /\ scheduled' = [c \in msg |-> TRUE] @@ scheduled
-      /\ UNCHANGED <<mute>>
+        /\ scheduled' = [c \in msg |-> c \notin muting] @@ scheduled
+        /\ mute' = (mutor[cown] :> mute[mutor[cown]] \union muting) @@ mute
+      ELSE
+        /\ scheduled' = [c \in msg |-> TRUE] @@ scheduled
+        /\ UNCHANGED <<mute>>
+    /\ blocker' = [c \in msg |-> Null] @@ blocker
   /\ queue' = (cown :> Tail(queue[cown])) @@ queue
   /\ mutor' = (cown :> Null) @@ mutor
   /\ UNCHANGED <<fuel, protected>>
@@ -101,7 +104,7 @@ Unmute ==
   /\ unmuting /= {}
   /\ mute' = [k \in invalid_keys |-> {}] @@ mute
   /\ scheduled' = [c \in unmuting |-> TRUE] @@ scheduled
-  /\ UNCHANGED <<fuel, queue, mutor, protected>>
+  /\ UNCHANGED <<fuel, queue, mutor, protected, blocker>>
 
 Run(cown) ==
   \/ Acquire(cown)
