@@ -2,9 +2,9 @@
 
 EXTENDS FiniteSets, Naturals, Sequences, TLC
 
-CONSTANTS Null
-BehaviourLimit == 4
+Null == 0
 Cowns == 1..3
+BehaviourLimit == 4
 OverloadThreshold == 2
 
 Min(s) == CHOOSE x \in s: \A y \in s \ {x}: y > x
@@ -18,8 +18,8 @@ ReduceSet(op(_, _), set, acc) ==
     IF s = {} THEN acc ELSE LET x == Pick(s) IN op(x, f[s \ {x}])
   IN f[set]
 
-VARIABLES fuel, queue, scheduled, mute, mutor, protected, blocker
-vars == <<fuel, queue, scheduled, mute, mutor, protected, blocker>>
+VARIABLES fuel, queue, scheduled, overloaded, mute, mutor, protected, blocker
+vars == <<fuel, queue, scheduled, overloaded, mute, mutor, protected, blocker>>
 
 Sleeping(c) == scheduled[c] /\ (Len(queue[c]) = 0)
 Available(c) == scheduled[c] /\ (Len(queue[c]) > 0)
@@ -27,15 +27,16 @@ Running(c) ==
   /\ scheduled[c]
   /\ IF Len(queue[c]) = 0 THEN FALSE ELSE c = Max(Head(queue[c]))
 
-Overloaded(c) == Len(queue[c]) >= OverloadThreshold
 Muted(c) == c \in UNION Range(mute)
-TriggersMuting(c) == Overloaded(c) \/ Muted(c)
-TriggersProtection(c) == Overloaded(c) \/ protected[c]
+TriggersOverloading(c) == Len(queue[c]) > OverloadThreshold
+TriggersMuting(c) == overloaded[c] \/ Muted(c)
+TriggersProtection(c) == overloaded[c] \/ protected[c]
 
 Init ==
   /\ fuel = BehaviourLimit
   /\ queue = [c \in Cowns |-> <<{c}>>]
   /\ scheduled = [c \in Cowns |-> TRUE]
+  /\ overloaded = [c \in Cowns |-> FALSE]
   /\ mute = [c \in Cowns |-> {}]
   /\ mutor = [c \in Cowns |-> Null]
   /\ protected = [c \in Cowns |-> FALSE]
@@ -62,6 +63,7 @@ Acquire(cown) ==
       ELSE
         /\ scheduled' = (cown :> FALSE) @@ scheduled
         /\ UNCHANGED <<mute, protected>>
+  /\ overloaded' = (cown :> TriggersOverloading(cown)) @@ overloaded
   /\ UNCHANGED <<fuel, mutor>>
 
 ScanMsg(cown, senders, receivers) ==
@@ -80,13 +82,16 @@ Send(cown) ==
     /\ ScanMsg(cown, Head(queue[cown]), msg)
     /\ queue' = (Min(msg) :> Append(queue[Min(msg)], msg)) @@ queue
   /\ fuel' = fuel - 1
-  /\ UNCHANGED <<scheduled, mute, protected, blocker>>
+  /\ UNCHANGED <<scheduled, overloaded, mute, protected, blocker>>
 
 Complete(cown) ==
   /\ Running(cown)
   /\ LET msg == Head(queue[cown]) IN
-    /\ IF mutor[cown] /= Null THEN
-      LET muting == {c \in msg: ~TriggersProtection(c)} IN
+    /\ IF
+        /\ mutor[cown] /= Null
+        /\ \A s \in msg: s /= blocker[mutor[cown]] \* TODO
+      THEN
+      LET muting == {c \in msg: ~TriggersProtection(c) /\ ~TriggersOverloading(c)} IN
         /\ scheduled' = [c \in msg |-> c \notin muting] @@ scheduled
         /\ mute' = (mutor[cown] :> mute[mutor[cown]] \union muting) @@ mute
       ELSE
@@ -94,17 +99,18 @@ Complete(cown) ==
         /\ UNCHANGED <<mute>>
     /\ blocker' = [c \in msg |-> Null] @@ blocker
   /\ queue' = (cown :> Tail(queue[cown])) @@ queue
+  /\ overloaded' = (cown :> TriggersOverloading(cown)) @@ overloaded
   /\ mutor' = (cown :> Null) @@ mutor
   /\ UNCHANGED <<fuel, protected>>
 
 Unmute ==
   \* TODO: muted key is valid
-  LET invalid_keys == {k \in DOMAIN mute: ~Overloaded(k)} IN
+  LET invalid_keys == {k \in DOMAIN mute: ~overloaded[k]} IN
   LET unmuting == UNION Range([k \in invalid_keys |-> mute[k]]) IN
   /\ unmuting /= {}
   /\ mute' = [k \in invalid_keys |-> {}] @@ mute
   /\ scheduled' = [c \in unmuting |-> TRUE] @@ scheduled
-  /\ UNCHANGED <<fuel, queue, mutor, protected, blocker>>
+  /\ UNCHANGED <<fuel, queue, overloaded, mutor, protected, blocker>>
 
 Run(cown) ==
   \/ Acquire(cown)
@@ -125,10 +131,15 @@ MessageLimit ==
 
 MutedNotScheduled == \A c \in Cowns: Muted(c) => ~scheduled[c]
 
-ProtectedNotMuted == \A c \in Cowns: protected[c] => ~Muted(c)
+PriorityNotMuted == \A c \in Cowns: TriggersProtection(c) => ~Muted(c)
+
+\* Bad == \A c \in Cowns: blocker[c] \notin mute[c]
 
 Termination == <>[](\A c \in Cowns: Sleeping(c))
-\* implies \A c \in Cowns: Overloaded(c) ~> scheduled[c]
+\* implies \A c \in Cowns: overloaded[c] ~> scheduled[c]
+
+OverloadTrigger ==
+  \A c \in Cowns: (Len(queue[c]) > OverloadThreshold) ~> overloaded[c]
 
 \* TODO: no message from overloaded cown is in muted queue
 \* PriorityMessageUnblocked ==
