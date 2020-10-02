@@ -1,11 +1,12 @@
 ---- MODULE backpressure ----
 
-EXTENDS FiniteSets, Naturals, Sequences, TLC
+EXTENDS FiniteSets, Integers, Sequences, TLC
 
 Null == 0
 Cowns == 1..3
 BehaviourLimit == 4
 OverloadThreshold == 2
+PriorityLevels == {-1, 0, 1}
 
 Min(s) == CHOOSE x \in s: \A y \in s \ {x}: y > x
 Max(s) == CHOOSE x \in s: \A y \in s \ {x}: y < x
@@ -18,29 +19,22 @@ ReduceSet(op(_, _), set, acc) ==
     IF s = {} THEN acc ELSE LET x == Pick(s) IN op(x, f[s \ {x}])
   IN f[set]
 
-VARIABLES fuel, queue, scheduled, overloaded, mute, mutor, protected, blocker
-vars == <<fuel, queue, scheduled, overloaded, mute, mutor, protected, blocker>>
+VARIABLES fuel, queue, scheduled, running, priority, mutor, mute
+vars == <<fuel, queue, scheduled, running, priority, mutor, mute>>
 
 Sleeping(c) == scheduled[c] /\ (Len(queue[c]) = 0)
 Available(c) == scheduled[c] /\ (Len(queue[c]) > 0)
-Running(c) ==
-  /\ scheduled[c]
-  /\ IF Len(queue[c]) = 0 THEN FALSE ELSE c = Max(Head(queue[c]))
-
+Overloaded(c) == Len(queue[c]) > OverloadThreshold
 Muted(c) == c \in UNION Range(mute)
-TriggersOverloading(c) == Len(queue[c]) > OverloadThreshold
-TriggersMuting(c) == overloaded[c] \/ Muted(c)
-TriggersProtection(c) == overloaded[c] \/ protected[c]
 
 Init ==
   /\ fuel = BehaviourLimit
   /\ queue = [c \in Cowns |-> <<{c}>>]
   /\ scheduled = [c \in Cowns |-> TRUE]
-  /\ overloaded = [c \in Cowns |-> FALSE]
-  /\ mute = [c \in Cowns |-> {}]
+  /\ running = [c \in Cowns |-> FALSE]
+  /\ priority = [c \in Cowns |-> 0]
   /\ mutor = [c \in Cowns |-> Null]
-  /\ protected = [c \in Cowns |-> FALSE]
-  /\ blocker = [c \in Cowns |-> Null]
+  /\ mute = [c \in Cowns |-> {}]
 
 Terminating ==
   /\ \A c \in Cowns: Sleeping(c)
@@ -53,96 +47,79 @@ Acquire(cown) ==
     /\ LET next == Min({c \in msg: c > cown}) IN
       LET q == (cown :> Tail(queue[cown])) @@ queue IN
       /\ queue' = (next :> Append(queue[next], msg)) @@ q
-      /\ blocker' = (cown :> next) @@ blocker
-    /\ IF \E c \in msg: TriggersProtection(c) THEN
-        LET p == {c \in msg: c > cown} IN
-        /\ protected' = [c \in p |-> TRUE] @@ protected
-        \* Note: mute map is kept up-to-date
-        /\ mute' = [k \in DOMAIN mute |-> mute[k] \ p] @@ mute
-        /\ scheduled' = (cown :> FALSE) @@ [c \in p |-> TRUE] @@ scheduled
-      ELSE
-        /\ scheduled' = (cown :> FALSE) @@ scheduled
-        /\ UNCHANGED <<mute, protected>>
-  /\ overloaded' = (cown :> TriggersOverloading(cown)) @@ overloaded
-  /\ UNCHANGED <<fuel, mutor>>
+  /\ scheduled' = (cown :> FALSE) @@ scheduled
+  /\ UNCHANGED <<fuel, running, priority, mutor, mute>>
 
-ScanMsg(cown, senders, receivers) ==
-  IF \E r \in receivers: TriggersMuting(r) THEN
-    LET m == Min({r \in receivers: TriggersMuting(r)}) IN
-    mutor' = (cown :> m) @@ mutor
-  ELSE
-    UNCHANGED <<mutor>>
+Prerun(cown) ==
+  /\ scheduled[cown]
+  /\ IF Len(queue[cown]) = 0 THEN FALSE ELSE cown = Max(Head(queue[cown]))
+  /\ priority' = (cown :> IF Overloaded(cown) THEN 1 ELSE 0) @@ priority
+  /\ running' = (cown :> TRUE) @@ running
+  /\ UNCHANGED <<fuel, queue, scheduled, mutor, mute>>
 
 Send(cown) ==
-  /\ Running(cown)
+  /\ running[cown]
   /\ fuel > 0
   /\ \E msg \in SUBSET Cowns:
     /\ Cardinality(msg) > 0
     /\ Cardinality(msg) <= 3 \* cut state space
-    /\ ScanMsg(cown, Head(queue[cown]), msg)
     /\ queue' = (Min(msg) :> Append(queue[Min(msg)], msg)) @@ queue
+    /\ IF
+        /\ mutor[cown] = Null
+        /\ \E c \in msg: (priority[c] = 1) /\ (c \notin Head(queue[cown]))
+      THEN
+        mutor' = (cown :> Min(msg)) @@ mutor
+      ELSE
+        /\ TRUE
+        /\ UNCHANGED <<mutor>>
   /\ fuel' = fuel - 1
-  /\ UNCHANGED <<scheduled, overloaded, mute, protected, blocker>>
+  /\ UNCHANGED <<running, scheduled, priority, mute>>
 
 Complete(cown) ==
-  /\ Running(cown)
+  /\ running[cown]
   /\ LET msg == Head(queue[cown]) IN
-    /\ IF
-        /\ mutor[cown] /= Null
-        /\ \A s \in msg: s /= blocker[mutor[cown]] \* TODO
-      THEN
-      LET muting == {c \in msg: ~TriggersProtection(c) /\ ~TriggersOverloading(c)} IN
-        /\ scheduled' = [c \in msg |-> c \notin muting] @@ scheduled
+    /\ IF mutor[cown] /= Null THEN
+        LET muting == {c \in msg: priority[c] = 0} IN
+        /\ priority' = [c \in muting |-> -1] @@ priority
         /\ mute' = (mutor[cown] :> mute[mutor[cown]] \union muting) @@ mute
+        /\ scheduled' = [c \in msg |-> c \notin muting] @@ scheduled
       ELSE
         /\ scheduled' = [c \in msg |-> TRUE] @@ scheduled
-        /\ UNCHANGED <<mute>>
-    /\ blocker' = [c \in msg |-> Null] @@ blocker
+        /\ UNCHANGED <<priority, mute>>
   /\ queue' = (cown :> Tail(queue[cown])) @@ queue
-  /\ overloaded' = (cown :> TriggersOverloading(cown)) @@ overloaded
+  /\ running' = (cown :> FALSE) @@ running
   /\ mutor' = (cown :> Null) @@ mutor
-  /\ UNCHANGED <<fuel, protected>>
-
-Unmute ==
-  \* TODO: muted key is valid
-  LET invalid_keys == {k \in DOMAIN mute: ~overloaded[k]} IN
-  LET unmuting == UNION Range([k \in invalid_keys |-> mute[k]]) IN
-  /\ unmuting /= {}
-  /\ mute' = [k \in invalid_keys |-> {}] @@ mute
-  /\ scheduled' = [c \in unmuting |-> TRUE] @@ scheduled
-  /\ UNCHANGED <<fuel, queue, overloaded, mutor, protected, blocker>>
+  /\ UNCHANGED <<fuel>>
 
 Run(cown) ==
   \/ Acquire(cown)
+  \/ Prerun(cown)
   \/ Send(cown)
   \/ Complete(cown)
 
-Next == Terminating \/ \E c \in Cowns: Run(c) \/ Unmute
+Next == Terminating \/ \E c \in Cowns: Run(c)
 
 Spec ==
   /\ Init
   /\ [][Next]_vars
   /\ \A c \in Cowns: WF_vars(Run(c))
-  /\ WF_vars(Unmute)
 
 MessageLimit ==
   LET msgs == ReduceSet(LAMBDA c, sum: sum + Len(queue[c]), Cowns, 0) IN
   msgs <= (BehaviourLimit + Max(Cowns))
-
-MutedNotScheduled == \A c \in Cowns: Muted(c) => ~scheduled[c]
-
-PriorityNotMuted == \A c \in Cowns: TriggersProtection(c) => ~Muted(c)
+RunningIsScheduled ==
+  \A c \in Cowns: running[c] => scheduled[c]
+LowPriorityNotRunning ==
+  \A c \in Cowns: (priority[c] = -1) => ~scheduled[c]
+LowPriorityMuted ==
+  \A c \in Cowns: (priority[c] = -1) => Muted(c)
 
 \* Bad == \A c \in Cowns: blocker[c] \notin mute[c]
 
 Termination == <>[](\A c \in Cowns: Sleeping(c))
-\* implies \A c \in Cowns: overloaded[c] ~> scheduled[c]
-
-OverloadTrigger ==
-  \A c \in Cowns: (Len(queue[c]) > OverloadThreshold) ~> overloaded[c]
+OverloadRaisesPriority ==
+  \A c \in Cowns: (scheduled[c] /\ Overloaded(c)) => (priority[c] = 1)
 
 \* TODO: no message from overloaded cown is in muted queue
-\* PriorityMessageUnblocked ==
-\*   \A c \in Cowns: Muted(c) => ...
 
 ====
