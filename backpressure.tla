@@ -144,12 +144,10 @@ BehaviourAcquisition ==
   \A c \in Cowns: scheduled[c] =>
     ~(\E k \in Cowns: (k > c) /\ (c \in UNION Range(queue[k])))
 
-\* TODO: the following is a bit too strong, there should be a comparison somewhere
-\* InvalidPriorityMix(msg) ==
-\*   /\ \E c \in msg: priority[c] = -1
-\*   /\ \E c \in msg: priority[c] = 1
-\* Prioritization ==
-\*   \A c \in Cowns: ForallSeq(LAMBDA msg: ~InvalidPriorityMix(msg), queue[c])
+Nonblocking ==
+  \A c \in Cowns: \A m \in Range(queue[c]):
+    ~(\E h \in m: priority[h] = 1 /\ \E l \in m: priority[l] = -1
+      /\ h < c /\ l <= c)
 
 Termination == <>[](\A c \in Cowns: Sleeping(c))
 OverloadRaisesPriority ==
