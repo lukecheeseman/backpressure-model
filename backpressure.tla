@@ -123,18 +123,28 @@ Complete(cown) ==
   /\ mutor' = (cown :> Null) @@ mutor
   /\ UNCHANGED <<fuel, blocker>>
 
+Unmute ==
+  LET invalid_keys == {c \in DOMAIN mute: ~Overloaded(c) /\ ~Muted(c)} IN
+  LET unmuting == UNION Range([c \in invalid_keys |-> mute[c]]) IN
+  /\ unmuting /= {}
+  /\ priority' = [c \in unmuting |-> 0] @@ priority
+  /\ mute' = [c \in invalid_keys |-> {}] @@ mute
+  /\ scheduled' = [c \in unmuting |-> TRUE] @@ scheduled
+  /\ UNCHANGED <<fuel, queue, running, blocker, mutor>>
+
 Run(cown) ==
   \/ Acquire(cown)
   \/ Prerun(cown)
   \/ Send(cown)
   \/ Complete(cown)
 
-Next == Terminating \/ \E c \in Cowns: Run(c)
+Next == Terminating \/ \E c \in Cowns: Run(c) \/ Unmute
 
 Spec ==
   /\ Init
   /\ [][Next]_vars
   /\ \A c \in Cowns: WF_vars(Run(c))
+  /\ WF_vars(Unmute)
 
 MessageLimit ==
   LET msgs == ReduceSet(LAMBDA c, sum: sum + Len(queue[c]), Cowns, 0) IN
@@ -154,7 +164,5 @@ Nonblocking ==
 Termination == <>[](\A c \in Cowns: Sleeping(c))
 OverloadRaisesPriority ==
   \A c \in Cowns: (scheduled[c] /\ Overloaded(c)) => (priority[c] = 1)
-
-\* TODO: no message from overloaded cown is in muted queue
 
 ====
