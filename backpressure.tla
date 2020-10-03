@@ -19,10 +19,6 @@ ReduceSet(op(_, _), set, acc) ==
     IF s = {} THEN acc ELSE LET x == Pick(s) IN op(x, f[s \ {x}])
   IN f[set]
 
-RECURSIVE ForallSeq(_, _)
-ForallSeq(p(_), s) ==
-  IF Len(s) = 0 THEN TRUE ELSE p(Head(s)) /\ ForallSeq(p, Tail(s))
-
 VARIABLES fuel, queue, scheduled, running, priority, blocker, mutor, mute
 vars == <<fuel, queue, scheduled, running, priority, blocker, mutor, mute>>
 
@@ -30,6 +26,13 @@ Sleeping(c) == scheduled[c] /\ (Len(queue[c]) = 0)
 Available(c) == scheduled[c] /\ (Len(queue[c]) > 0)
 Overloaded(c) == Len(queue[c]) > OverloadThreshold
 Muted(c) == c \in UNION Range(mute)
+
+RECURSIVE Blockers(_)
+Blockers(c) ==
+  IF blocker[c] = Null THEN {} ELSE {blocker[c]} \union Blockers(blocker[c])
+Prioritizing(cs) ==
+  LET unprioritized == {c \in cs: priority[c] < 1} IN
+  unprioritized \union UNION {Blockers(c): c \in unprioritized}
 
 Init ==
   /\ fuel = BehaviourLimit
@@ -50,7 +53,7 @@ Acquire(cown) ==
   /\ LET msg == Head(queue[cown]) IN
     /\ cown < Max(msg)
     /\ IF \E c \in msg: priority[c] = 1 THEN
-        LET prioritizing == {c \in msg: (c > cown) /\ (priority[c] < 1)} IN
+        LET prioritizing == Prioritizing({c \in msg: c > cown}) IN
         LET unmuting == {c \in prioritizing: priority[c] = -1} IN
         \* TODO: eventually reduce priority
         /\ priority' = [c \in prioritizing |-> 1] @@ priority
@@ -70,7 +73,8 @@ Acquire(cown) ==
 Prerun(cown) ==
   /\ scheduled[cown]
   /\ IF Len(queue[cown]) = 0 THEN FALSE ELSE cown = Max(Head(queue[cown]))
-  /\ priority' = (cown :> IF Overloaded(cown) THEN 1 ELSE 0) @@ priority
+  /\ priority' =
+    (cown :> IF Overloaded(cown) THEN 1 ELSE priority[cown]) @@ priority
   /\ running' = (cown :> TRUE) @@ running
   /\ blocker' = [c \in Head(queue[cown]) |-> Null] @@ blocker
   /\ UNCHANGED <<fuel, queue, scheduled, mutor, mute>>
@@ -83,8 +87,8 @@ Send(cown) ==
     /\ Cardinality(msg) <= 3 \* cut state space
     /\ queue' = (Min(msg) :> Append(queue[Min(msg)], msg)) @@ queue
     /\ IF \E c \in msg: priority[c] = 1 THEN
-      LET prioritizing == {c \in msg: priority[c] < 1} IN
-      LET unmuting == {c \in msg: priority[c] = -1} IN
+      LET prioritizing == Prioritizing(msg) IN
+      LET unmuting == {c \in prioritizing: priority[c] = -1} IN
       /\ priority' = [c \in prioritizing |-> 1] @@ priority
       /\ mute' = [k \in DOMAIN mute |-> mute[k] \ unmuting] @@ mute
       /\ scheduled' = [c \in unmuting |-> TRUE] @@ scheduled
@@ -97,10 +101,8 @@ Send(cown) ==
         THEN
           /\ mutor' = (cown :> Min(mutors)) @@ mutor
         ELSE
-          /\ TRUE
           /\ UNCHANGED <<mutor>>
       ELSE
-        /\ TRUE
         /\ UNCHANGED <<scheduled, priority, mute, mutor>>
   /\ fuel' = fuel - 1
   /\ UNCHANGED <<running, blocker>>
