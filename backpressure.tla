@@ -3,7 +3,7 @@
 EXTENDS FiniteSets, Integers, Sequences, TLC
 
 Null == 0
-Cowns == 1..3
+Cowns == 1..4
 BehaviourLimit == 4
 OverloadThreshold == 2
 PriorityLevels == {-1, 0, 1}
@@ -39,6 +39,9 @@ Blockers(c) ==
 Prioritizing(cs) ==
   LET unprioritized == {c \in cs: priority[c] < 1} IN
   unprioritized \union UNION {Blockers(c): c \in unprioritized}
+ValidMutor(c) ==
+  \/ (priority[c] = 1) /\ Overloaded(c)
+  \/ (priority[c] = -1)
 
 Init ==
   /\ fuel = BehaviourLimit
@@ -97,7 +100,7 @@ Send(cown) ==
       /\ priority' = [c \in prioritizing |-> 1] @@ priority
       /\ mute' = [k \in DOMAIN mute |-> mute[k] \ unmuting] @@ mute
       /\ scheduled' = [c \in unmuting |-> TRUE] @@ scheduled
-      /\ LET mutors == HighPriority(receivers \ senders) IN
+      /\ LET mutors == {c \in receivers \ senders: ValidMutor(c)} IN
         IF
           /\ mutors /= {}
           /\ mutor[cown] = Null
