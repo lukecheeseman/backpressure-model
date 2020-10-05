@@ -74,8 +74,6 @@ Acquire(cown) ==
       LET prioritizing == Prioritizing({c \in msg: c > cown}) IN
       LET unmuting == LowPriority(prioritizing) IN
       /\ priority' = [c \in prioritizing |-> 1] @@ priority
-      \* TODO: mute map kept in sync
-      /\ mute' = [k \in DOMAIN mute |-> mute[k] \ unmuting] @@ mute
       /\ scheduled' = (cown :> FALSE) @@ [c \in unmuting |-> TRUE] @@ scheduled
     ELSE
       /\ scheduled' = (cown :> FALSE) @@ scheduled
@@ -84,7 +82,7 @@ Acquire(cown) ==
     /\ blocker' = (cown :> next) @@ blocker
     /\ LET q == (cown :> Tail(queue[cown])) @@ queue IN
       queue' = (next :> Append(queue[next], msg)) @@ q
-  /\ UNCHANGED <<fuel, running, mutor>>
+  /\ UNCHANGED <<fuel, running, mutor, mute>>
 
 Prerun(cown) ==
   LET msg == CurrentMessage(cown) IN
@@ -107,7 +105,6 @@ Send(cown) ==
       LET prioritizing == Prioritizing(receivers) IN
       LET unmuting == LowPriority(prioritizing) IN
       /\ priority' = [c \in prioritizing |-> 1] @@ priority
-      /\ mute' = [k \in DOMAIN mute |-> mute[k] \ unmuting] @@ mute
       /\ scheduled' = [c \in unmuting |-> TRUE] @@ scheduled
       /\ LET mutors == {c \in receivers \ senders: ValidMutor(c)} IN
         IF
@@ -120,9 +117,9 @@ Send(cown) ==
         ELSE
           /\ UNCHANGED <<mutor>>
       ELSE
-        /\ UNCHANGED <<scheduled, priority, mute, mutor>>
+        /\ UNCHANGED <<scheduled, priority, mutor>>
   /\ fuel' = fuel - 1
-  /\ UNCHANGED <<running, blocker>>
+  /\ UNCHANGED <<running, blocker, mute>>
 
 Complete(cown) ==
   LET msg == CurrentMessage(cown) IN
@@ -142,7 +139,7 @@ Complete(cown) ==
 
 Unmute ==
   LET invalid_keys == {c \in DOMAIN mute: (priority[c] = 0) \/ Sleeping(c)} IN
-  LET unmuting == UNION Range([c \in invalid_keys |-> mute[c]]) IN
+  LET unmuting == UNION Range([k \in invalid_keys |-> LowPriority(mute[k])]) IN
   /\ unmuting /= {}
   /\ priority' = [c \in unmuting |-> 0] @@ priority
   /\ mute' = [c \in invalid_keys |-> {}] @@ mute
@@ -171,7 +168,7 @@ RunningIsScheduled == \A c \in Cowns: running[c] => scheduled[c]
 
 LowPriorityNotScheduled == \A c \in Cowns: (priority[c] = -1) => ~scheduled[c]
 
-LowPriorityMuted == \A c \in Cowns: (priority[c] = -1) <=> Muted(c)
+LowPriorityMuted == \A c \in Cowns: (priority[c] = -1) => Muted(c)
 
 BehaviourAcquisition ==
   \A c \in Cowns: scheduled[c] =>
