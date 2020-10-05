@@ -180,7 +180,4 @@ Nonblocking ==
 
 Termination == <>[](\A c \in Cowns: Sleeping(c))
 
-OverloadRaisesPriority ==
-  \A c \in Cowns: (scheduled[c] /\ Overloaded(c)) => (priority[c] = 1)
-
 ====
