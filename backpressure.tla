@@ -14,6 +14,7 @@ Max(s) == CHOOSE x \in s: \A y \in s \ {x}: y < x
 Range(f) == {f[x]: x \in DOMAIN f}
 
 Pick(s) == CHOOSE x \in s: TRUE
+
 ReduceSet(op(_, _), set, acc) ==
   LET f[s \in SUBSET set] ==
     IF s = {} THEN acc ELSE LET x == Pick(s) IN op(x, f[s \ {x}])
@@ -23,12 +24,19 @@ VARIABLES fuel, queue, scheduled, running, priority, blocker, mutor, mute
 vars == <<fuel, queue, scheduled, running, priority, blocker, mutor, mute>>
 
 Sleeping(c) == scheduled[c] /\ (Len(queue[c]) = 0)
+
 Available(c) == scheduled[c] /\ (Len(queue[c]) > 0)
+
 Overloaded(c) == Len(queue[c]) > OverloadThreshold
+
 Muted(c) == c \in UNION Range(mute)
+
 CurrentMessage(c) == IF Len(queue[c]) > 0 THEN Head(queue[c]) ELSE {}
+
 LowPriority(cs) == {c \in cs: priority[c] = -1}
+
 HighPriority(cs) == {c \in cs: priority[c] = 1}
+
 RequiresPriority(c) ==
   \/ Overloaded(c)
   \/ \E m \in Range(queue[c]): \E k \in m \ {c}: priority[k] = 1
@@ -39,6 +47,7 @@ Blockers(c) ==
 Prioritizing(cs) ==
   LET unprioritized == {c \in cs: priority[c] < 1} IN
   unprioritized \union UNION {Blockers(c): c \in unprioritized}
+
 ValidMutor(c) ==
   \/ (priority[c] = 1) /\ Overloaded(c)
   \/ (priority[c] = -1)
@@ -157,9 +166,13 @@ Spec ==
 MessageLimit ==
   LET msgs == ReduceSet(LAMBDA c, sum: sum + Len(queue[c]), Cowns, 0) IN
   msgs <= (BehaviourLimit + Max(Cowns))
+
 RunningIsScheduled == \A c \in Cowns: running[c] => scheduled[c]
+
 LowPriorityNotScheduled == \A c \in Cowns: (priority[c] = -1) => ~scheduled[c]
+
 LowPriorityMuted == \A c \in Cowns: (priority[c] = -1) <=> Muted(c)
+
 BehaviourAcquisition ==
   \A c \in Cowns: scheduled[c] =>
     ~(\E k \in Cowns: (k > c) /\ (c \in UNION Range(queue[k])))
@@ -169,6 +182,7 @@ Nonblocking ==
     ~(\E h \in HighPriority(m): \E l \in LowPriority(m): (h < c) /\ (l <= c))
 
 Termination == <>[](\A c \in Cowns: Sleeping(c))
+
 OverloadRaisesPriority ==
   \A c \in Cowns: (scheduled[c] /\ Overloaded(c)) => (priority[c] = 1)
 
