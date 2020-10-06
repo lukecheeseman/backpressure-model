@@ -180,4 +180,6 @@ Nonblocking ==
 
 Termination == <>[](\A c \in Cowns: Sleeping(c))
 
+SomeCownWillBeScheduled == []<>(\E c \in Cowns: scheduled[c])
+
 ====
