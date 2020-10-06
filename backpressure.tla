@@ -170,6 +170,12 @@ LowPriorityNotScheduled == \A c \in Cowns: (priority[c] = -1) => ~scheduled[c]
 
 LowPriorityMuted == \A c \in Cowns: (priority[c] = -1) => Muted(c)
 
+WillScheduleCown == \E c \in Cowns:
+  \/ scheduled[c]
+  \/
+    /\ priority[c] = -1
+    /\ \E k \in DOMAIN mute: (c \in mute[k]) /\ (priority[k] = 0)
+
 BehaviourAcquisition ==
   \A c \in Cowns: scheduled[c] =>
     ~(\E k \in Cowns: (k > c) /\ (c \in UNION Range(queue[k])))
