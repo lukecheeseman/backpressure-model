@@ -180,16 +180,16 @@ WillScheduleCown == \E c \in Cowns:
     /\ priority[c] = -1
     /\ \E k \in DOMAIN mute: (c \in mute[k]) /\ (priority[k] = 0)
 
-BehaviourAcquisition ==
-  \A c \in Cowns: scheduled[c] =>
-    ~(\E k \in Cowns: (k > c) /\ (c \in UNION Range(queue[k])))
-
 Nonblocking ==
   \A c \in Cowns: \A m \in Range(queue[c]):
     ~(\E h \in HighPriority(m): \E l \in LowPriority(m): (h < c) /\ (l <= c))
 
 RunningNotBlocked ==
   \A c \in Cowns: running[c] => (\A k \in CurrentMessage(c): blocker[k] = Null)
+
+Acquired(c) == \E k \in Cowns: (k > c) /\ (c \in UNION Range(queue[k]))
+UnscheduledByMuteOrAcquire ==
+  \A c \in Cowns: ~((priority[c] = -1) \/ Acquired(c)) <=> scheduled[c]
 
 Termination == <>[](\A c \in Cowns: Sleeping(c))
 
