@@ -191,6 +191,9 @@ Acquired(c) == \E k \in Cowns: (k > c) /\ (c \in UNION Range(queue[k]))
 UnscheduledByMuteOrAcquire ==
   \A c \in Cowns: ~((priority[c] = -1) \/ Acquired(c)) <=> scheduled[c]
 
+BehaviourAcquisition ==
+  \A c \in Cowns: \A k \in UNION Range(queue[c]): (k < c) => ~scheduled[k]
+
 Termination == <>[](\A c \in Cowns: Sleeping(c))
 
 SomeCownWillBeScheduled == []<>(\E c \in Cowns: scheduled[c])
