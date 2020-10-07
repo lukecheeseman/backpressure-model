@@ -165,7 +165,8 @@ MessageLimit ==
   LET msgs == ReduceSet(LAMBDA c, sum: sum + Len(queue[c]), Cowns, 0) IN
   msgs <= (BehaviourLimit + Max(Cowns))
 
-RunningIsScheduled == \A c \in Cowns: running[c] => scheduled[c]
+RunningIsScheduled ==
+  \A c \in Cowns: running[c] => scheduled[c] /\ (c = Max(CurrentMessage(c)))
 
 LowPriorityNotScheduled == \A c \in Cowns: (priority[c] = -1) => ~scheduled[c]
 
