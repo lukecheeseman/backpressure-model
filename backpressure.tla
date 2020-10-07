@@ -186,6 +186,9 @@ Nonblocking ==
   \A c \in Cowns: \A m \in Range(queue[c]):
     ~(\E h \in HighPriority(m): \E l \in LowPriority(m): (h < c) /\ (l <= c))
 
+RunningNotBlocked ==
+  \A c \in Cowns: running[c] => (\A k \in CurrentMessage(c): blocker[k] = Null)
+
 Termination == <>[](\A c \in Cowns: Sleeping(c))
 
 SomeCownWillBeScheduled == []<>(\E c \in Cowns: scheduled[c])
