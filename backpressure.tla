@@ -168,6 +168,8 @@ MessageLimit ==
 RunningIsScheduled ==
   \A c \in Cowns: running[c] => scheduled[c] /\ (c = Max(CurrentMessage(c)))
 
+CownNotMutedBySelf == \A c \in Cowns: c \notin mute[c]
+
 LowPriorityNotScheduled == \A c \in Cowns: (priority[c] = -1) => ~scheduled[c]
 
 LowPriorityMuted == \A c \in Cowns: (priority[c] = -1) => Muted(c)
