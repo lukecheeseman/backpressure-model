@@ -87,6 +87,7 @@ Acquire(cown) ==
 Prerun(cown) ==
   LET msg == CurrentMessage(cown) IN
   /\ scheduled[cown]
+  /\ ~running[cown]
   /\ IF msg = {} THEN FALSE ELSE cown = Max(msg)
   /\ priority' = (cown :> IF RequiresPriority(cown) THEN 1 ELSE 0) @@ priority
   /\ running' = (cown :> TRUE) @@ running
