@@ -194,6 +194,9 @@ UnscheduledByMuteOrAcquire ==
 BehaviourAcquisition ==
   \A c \in Cowns: \A k \in UNION Range(queue[c]): (k < c) => ~scheduled[k]
 
+SelfInCurrentMessage ==
+  \A c \in Cowns: (Len(queue[c]) > 0) => (c \in CurrentMessage(c))
+
 Termination == <>[](\A c \in Cowns: Sleeping(c))
 
 SomeCownWillBeScheduled == []<>(\E c \in Cowns: scheduled[c])
