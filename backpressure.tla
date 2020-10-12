@@ -170,8 +170,6 @@ RunningIsScheduled ==
 
 CownNotMutedBySelf == \A c \in Cowns: c \notin mute[c]
 
-LowPriorityNotScheduled == \A c \in Cowns: (priority[c] = -1) => ~scheduled[c]
-
 LowPriorityMuted == \A c \in Cowns: (priority[c] = -1) => Muted(c)
 
 WillScheduleCown == \E c \in Cowns:
