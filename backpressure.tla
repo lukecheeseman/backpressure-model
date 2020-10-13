@@ -57,7 +57,7 @@ Init ==
   /\ queue = [c \in Cowns |-> <<{c}>>]
   /\ scheduled = [c \in Cowns |-> TRUE]
   /\ running = [c \in Cowns |-> FALSE]
-  /\ priority = [c \in Cowns |-> Null]
+  /\ priority = [c \in Cowns |-> 0]
   /\ blocker = [c \in Cowns |-> Null]
   /\ mutor = [c \in Cowns |-> Null]
   /\ mute = [c \in Cowns |-> {}]
@@ -132,14 +132,18 @@ Complete(cown) ==
       /\ scheduled' = [c \in msg |-> c \notin muting] @@ scheduled
     ELSE
       /\ scheduled' = [c \in msg |-> TRUE] @@ scheduled
-      /\ UNCHANGED <<priority, mute>>
+      /\ priority' =
+        (cown :> IF Len(queue[cown]) = 1 THEN 0 ELSE priority[cown]) @@
+        [c \in msg \ {cown} |-> IF Len(queue[c]) = 0 THEN 0 ELSE priority[c]] @@
+        priority
+      /\ UNCHANGED <<mute>>
   /\ queue' = (cown :> Tail(queue[cown])) @@ queue
   /\ running' = (cown :> FALSE) @@ running
   /\ mutor' = (cown :> Null) @@ mutor
   /\ UNCHANGED <<fuel, blocker>>
 
 Unmute ==
-  LET invalid_keys == {c \in DOMAIN mute: (priority[c] = 0) \/ Sleeping(c)} IN
+  LET invalid_keys == {c \in DOMAIN mute: priority[c] = 0} IN
   LET unmuting == UNION Range([k \in invalid_keys |-> LowPriority(mute[k])]) IN
   /\ unmuting /= {}
   /\ priority' = [c \in unmuting |-> 0] @@ priority
@@ -199,6 +203,17 @@ AcquiredOnce ==
 
 SelfInCurrentMessage ==
   \A c \in Cowns: (Len(queue[c]) > 0) => (c \in CurrentMessage(c))
+
+HighPriorityScheduledOrAcquired ==
+  \A c \in Cowns: (priority[c] = 1) => (scheduled[c] \/ Acquired(c))
+
+HighPriorityInQueue ==
+  \A c \in Cowns: (priority[c] = 1) =>
+    \E k \in Cowns: c \in UNION Range(queue[k])
+
+Required(c) == \E k \in Cowns: (k < c) /\ (c \in UNION Range(queue[k]))
+SleepingIsNormalOrRequired ==
+  \A c \in Cowns: Sleeping(c) => ((priority[c] = 0) \/ Required(c))
 
 Termination == <>[](\A c \in Cowns: Sleeping(c))
 
