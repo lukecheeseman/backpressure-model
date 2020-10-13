@@ -192,7 +192,7 @@ UnscheduledByMuteOrAcquire ==
 BehaviourAcquisition ==
   \A c \in Cowns: \A k \in UNION Range(queue[c]): (k < c) => ~scheduled[k]
 
-AcquiredBy(a, b) == (a < b) /\ (a \in CurrentMessage(b))
+AcquiredBy(a, b) == (a < b) /\ (a \in UNION Range(queue[b]))
 AcquiredOnce ==
   \A a \in Cowns: \A b \in Cowns: \A c \in Cowns:
     (AcquiredBy(a, b) /\ AcquiredBy(a, c)) => (b = c)
