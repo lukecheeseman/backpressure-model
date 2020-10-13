@@ -204,9 +204,6 @@ AcquiredOnce ==
 SelfInCurrentMessage ==
   \A c \in Cowns: (Len(queue[c]) > 0) => (c \in CurrentMessage(c))
 
-HighPriorityScheduledOrAcquired ==
-  \A c \in Cowns: (priority[c] = 1) => (scheduled[c] \/ Acquired(c))
-
 HighPriorityInQueue ==
   \A c \in Cowns: (priority[c] = 1) =>
     \E k \in Cowns: c \in UNION Range(queue[k])
@@ -214,6 +211,10 @@ HighPriorityInQueue ==
 Required(c) == \E k \in Cowns: (k < c) /\ (c \in UNION Range(queue[k]))
 SleepingIsNormalOrRequired ==
   \A c \in Cowns: Sleeping(c) => ((priority[c] = 0) \/ Required(c))
+
+MuteSetsDisjoint ==
+  \A c \in Cowns: \A k \in Cowns:
+    ((mute[c] \intersect mute[k]) /= {}) => (c = k)
 
 Termination == <>[](\A c \in Cowns: Sleeping(c))
 
