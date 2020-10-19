@@ -165,6 +165,8 @@ Spec ==
   /\ \A c \in Cowns: WF_vars(Run(c))
   /\ WF_vars(Unmute)
 
+\* Invariants
+
 MessageLimit ==
   LET msgs == ReduceSet(LAMBDA c, sum: sum + Len(queue[c]), Cowns, 0) IN
   msgs <= (BehaviourLimit + Max(Cowns))
@@ -215,6 +217,31 @@ SleepingIsNormalOrRequired ==
 MuteSetsDisjoint ==
   \A c \in Cowns: \A k \in Cowns:
     ((mute[c] \intersect mute[k]) /= {}) => (c = k)
+
+\* https://github.com/tlaplus/Examples/blob/master/specifications/TransitiveClosure/TransitiveClosure.tla#L114
+TC(R) ==
+  LET
+    S == {r[1]: r \in R} \cup {r[2]: r \in R}
+    RECURSIVE TCR(_)
+    TCR(T) ==
+      IF T = {} THEN R
+      ELSE
+        LET
+          r == CHOOSE s \in T: TRUE
+          RR == TCR(T \ {r})
+        IN
+          RR \cup {<<s, t>> \in S \X S: <<s, r>> \in RR /\ <<r, t>> \in RR}
+  IN
+    TCR(S)
+
+CylcicTransitiveClosure(R(_, _)) ==
+  LET s == {<<a, b>> \in Cowns \X Cowns: R(a, b)}
+  IN \E c \in Cowns: <<c, c>> \in TC(s)
+
+MutedBy(a, b) == (a \in mute[b]) /\ (priority[a] = -1)
+AcyclicTCMute == ~CylcicTransitiveClosure(MutedBy)
+
+\* Temporal Properties
 
 Termination == <>[](\A c \in Cowns: Sleeping(c))
 
