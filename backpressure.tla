@@ -63,7 +63,8 @@ Init ==
   /\ mute = [c \in Cowns |-> {}]
 
 Terminating ==
-  /\ \A c \in Cowns: Sleeping(c)
+  /\ \A c \in Cowns: Len(queue[c]) = 0
+  /\ Assert(\A c \in Cowns: Sleeping(c), "Termination with unscheduled cowns")
   /\ UNCHANGED vars
 
 Acquire(cown) ==
