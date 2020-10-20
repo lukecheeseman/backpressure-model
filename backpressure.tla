@@ -63,16 +63,17 @@ Init ==
   /\ mute = [c \in Cowns |-> {}]
 
 Terminating ==
-  /\ \A c \in Cowns: Len(queue[c]) = 0
-  /\ Assert(\A c \in Cowns: Sleeping(c), "Termination with unscheduled cowns")
+  \* /\ \A c \in Cowns: Len(queue[c]) = 0
+  \* /\ Assert(\A c \in Cowns: Sleeping(c), "Termination with unscheduled cowns")
+  /\ \A c \in Cowns: Sleeping(c)
   /\ UNCHANGED vars
 
 Acquire(cown) ==
   LET msg == CurrentMessage(cown) IN
   /\ Available(cown)
   /\ cown < Max(msg)
-  /\ IF \E c \in msg: priority[c] = 1 THEN
-      LET prioritizing == Prioritizing({c \in msg: c > cown}) IN
+  /\ IF priority[cown] = 1 THEN
+      LET prioritizing == Prioritizing({Min({c \in msg: c > cown})}) IN
       LET unmuting == LowPriority(prioritizing) IN
       /\ priority' = [c \in prioritizing |-> 1] @@ priority
       /\ scheduled' = (cown :> FALSE) @@ [c \in unmuting |-> TRUE] @@ scheduled
@@ -103,8 +104,8 @@ Send(cown) ==
     /\ Cardinality(receivers) > 0
     /\ queue' =
       (Min(receivers) :> Append(queue[Min(receivers)], receivers)) @@ queue
-    /\ IF \E c \in receivers: priority[c] = 1 THEN
-      LET prioritizing == Prioritizing(receivers) IN
+    /\ IF priority[Min(receivers)] = 1 THEN
+      LET prioritizing == Prioritizing({Min(receivers)}) IN
       LET unmuting == LowPriority(prioritizing) IN
       /\ priority' = [c \in prioritizing |-> 1] @@ priority
       /\ scheduled' = [c \in unmuting |-> TRUE] @@ scheduled
@@ -179,11 +180,11 @@ CownNotMutedBySelf == \A c \in Cowns: c \notin mute[c]
 
 LowPriorityMuted == \A c \in Cowns: (priority[c] = -1) => Muted(c)
 
-WillScheduleCown == \E c \in Cowns:
-  \/ scheduled[c]
-  \/
-    /\ priority[c] = -1
-    /\ \E k \in DOMAIN mute: (c \in mute[k]) /\ (priority[k] = 0)
+\* WillScheduleCown == \E c \in Cowns:
+\*   \/ scheduled[c]
+\*   \/
+\*     /\ priority[c] = -1
+\*     /\ \E k \in DOMAIN mute: (c \in mute[k]) /\ (priority[k] = 0)
 
 Nonblocking ==
   \A c \in Cowns: \A m \in Range(queue[c]):
@@ -215,6 +216,8 @@ Required(c) == \E k \in Cowns: (k < c) /\ (c \in UNION Range(queue[k]))
 SleepingIsNormalOrRequired ==
   \A c \in Cowns: Sleeping(c) => ((priority[c] = 0) \/ Required(c))
 
+FreeCandy == \A c \in Cowns: ((priority[c] = 1) => (Len(queue[c]) > 0 \/ ~scheduled[c]))
+
 MuteSetsDisjoint ==
   \A c \in Cowns: \A k \in Cowns:
     ((mute[c] \intersect mute[k]) /= {}) => (c = k)
@@ -241,6 +244,12 @@ CylcicTransitiveClosure(R(_, _)) ==
 
 MutedBy(a, b) == (a \in mute[b]) /\ (priority[a] = -1)
 AcyclicTCMute == ~CylcicTransitiveClosure(MutedBy)
+
+\* Obstructs(a, b) ==
+\*   \/ AcquiredBy(a, b)
+\*   \/ (~Acquired(a) /\ MutedBy(a, b))
+
+\* Foo == ~CylcicTransitiveClosure(Obstructs)
 
 \* Temporal Properties
 
