@@ -63,7 +63,7 @@ Init ==
   /\ mute = [c \in Cowns |-> {}]
 
 Terminating ==
-  \* /\ \A c \in Cowns: Len(queue[c]) = 0
+  \* TODO: /\ \A c \in Cowns: Len(queue[c]) = 0
   \* /\ Assert(\A c \in Cowns: Sleeping(c), "Termination with unscheduled cowns")
   /\ \A c \in Cowns: Sleeping(c)
   /\ UNCHANGED vars
@@ -104,6 +104,7 @@ Send(cown) ==
     /\ Cardinality(receivers) > 0
     /\ queue' =
       (Min(receivers) :> Append(queue[Min(receivers)], receivers)) @@ queue
+    \* TODO: /\ IF \E c \in receivers: priority[c] = 1 THEN
     /\ IF priority[Min(receivers)] = 1 THEN
       LET prioritizing == Prioritizing({Min(receivers)}) IN
       LET unmuting == LowPriority(prioritizing) IN
@@ -169,6 +170,8 @@ Spec ==
 
 \* Invariants
 
+\* TODO: comments
+
 MessageLimit ==
   LET msgs == ReduceSet(LAMBDA c, sum: sum + Len(queue[c]), Cowns, 0) IN
   msgs <= (BehaviourLimit + Max(Cowns))
@@ -216,34 +219,35 @@ Required(c) == \E k \in Cowns: (k < c) /\ (c \in UNION Range(queue[k]))
 SleepingIsNormalOrRequired ==
   \A c \in Cowns: Sleeping(c) => ((priority[c] = 0) \/ Required(c))
 
-FreeCandy == \A c \in Cowns: ((priority[c] = 1) => (Len(queue[c]) > 0 \/ ~scheduled[c]))
+HighPriorityHasWork ==
+  \A c \in Cowns: ((priority[c] = 1) => ((Len(queue[c]) > 0) \/ ~scheduled[c]))
 
 MuteSetsDisjoint ==
   \A c \in Cowns: \A k \in Cowns:
     ((mute[c] \intersect mute[k]) /= {}) => (c = k)
 
 \* https://github.com/tlaplus/Examples/blob/master/specifications/TransitiveClosure/TransitiveClosure.tla#L114
-TC(R) ==
-  LET
-    S == {r[1]: r \in R} \cup {r[2]: r \in R}
-    RECURSIVE TCR(_)
-    TCR(T) ==
-      IF T = {} THEN R
-      ELSE
-        LET
-          r == CHOOSE s \in T: TRUE
-          RR == TCR(T \ {r})
-        IN
-          RR \cup {<<s, t>> \in S \X S: <<s, r>> \in RR /\ <<r, t>> \in RR}
-  IN
-    TCR(S)
+\* TC(R) ==
+\*   LET
+\*     S == {r[1]: r \in R} \cup {r[2]: r \in R}
+\*     RECURSIVE TCR(_)
+\*     TCR(T) ==
+\*       IF T = {} THEN R
+\*       ELSE
+\*         LET
+\*           r == CHOOSE s \in T: TRUE
+\*           RR == TCR(T \ {r})
+\*         IN
+\*           RR \cup {<<s, t>> \in S \X S: <<s, r>> \in RR /\ <<r, t>> \in RR}
+\*   IN
+\*     TCR(S)
 
-CylcicTransitiveClosure(R(_, _)) ==
-  LET s == {<<a, b>> \in Cowns \X Cowns: R(a, b)}
-  IN \E c \in Cowns: <<c, c>> \in TC(s)
+\* CylcicTransitiveClosure(R(_, _)) ==
+\*   LET s == {<<a, b>> \in Cowns \X Cowns: R(a, b)}
+\*   IN \E c \in Cowns: <<c, c>> \in TC(s)
 
-MutedBy(a, b) == (a \in mute[b]) /\ (priority[a] = -1)
-AcyclicTCMute == ~CylcicTransitiveClosure(MutedBy)
+\* MutedBy(a, b) == (a \in mute[b]) /\ (priority[a] = -1)
+\* AcyclicTCMute == ~CylcicTransitiveClosure(MutedBy)
 
 \* Obstructs(a, b) ==
 \*   \/ AcquiredBy(a, b)
