@@ -16,13 +16,15 @@ Range(f) == {f[x]: x \in DOMAIN f}
 VARIABLES fuel, queue, scheduled, running, priority, blocker, mutor, mute
 vars == <<fuel, queue, scheduled, running, priority, blocker, mutor, mute>>
 
-Sleeping(c) == scheduled[c] /\ (Len(queue[c]) = 0)
+EmptyQueue(c) == Len(queue[c]) = 0
 
-Available(c) == scheduled[c] /\ (Len(queue[c]) > 0)
+Sleeping(c) == scheduled[c] /\ EmptyQueue(c)
+
+Available(c) == scheduled[c] /\ ~EmptyQueue(c)
 
 Overloaded(c) == Len(queue[c]) > OverloadThreshold
 
-CurrentMessage(c) == IF Len(queue[c]) > 0 THEN Head(queue[c]) ELSE {}
+CurrentMessage(c) == IF EmptyQueue(c) THEN {} ELSE Head(queue[c])
 
 LowPriority(cs) == {c \in cs: priority[c] = -1}
 
@@ -54,7 +56,8 @@ Init ==
   /\ mute = [c \in Cowns |-> {}]
 
 Terminating ==
-  \* TODO: /\ \A c \in Cowns: Len(queue[c]) = 0
+  \* TODO: only require empty queue
+  \* /\ \A c \in Cowns: EmptyQueue(c)
   \* /\ Assert(\A c \in Cowns: Sleeping(c), "Termination with unscheduled cowns")
   /\ \A c \in Cowns: Sleeping(c)
   /\ UNCHANGED vars
@@ -95,7 +98,8 @@ Send(cown) ==
     /\ Cardinality(receivers) > 0
     /\ queue' =
       (Min(receivers) :> Append(queue[Min(receivers)], receivers)) @@ queue
-    \* TODO: /\ IF \E c \in receivers: priority[c] = 1 THEN
+    \* TODO:
+    \* /\ IF \E c \in receivers: priority[c] = 1 THEN
     /\ IF priority[Min(receivers)] = 1 THEN
       LET prioritizing == Prioritizing({Min(receivers)}) IN
       LET unmuting == LowPriority(prioritizing) IN
@@ -128,7 +132,7 @@ Complete(cown) ==
       /\ scheduled' = [c \in msg |-> TRUE] @@ scheduled
       /\ priority' =
         (cown :> IF Len(queue[cown]) = 1 THEN 0 ELSE priority[cown]) @@
-        [c \in msg \ {cown} |-> IF Len(queue[c]) = 0 THEN 0 ELSE priority[c]] @@
+        [c \in msg \ {cown} |-> IF EmptyQueue(c) THEN 0 ELSE priority[c]] @@
         priority
       /\ UNCHANGED <<mute>>
   /\ queue' = (cown :> Tail(queue[cown])) @@ queue
@@ -241,9 +245,8 @@ AcquiredOnce ==
   \A <<a, b, c>> \in Cowns \X Cowns \X Cowns:
     (AcquiredBy(a, b) /\ AcquiredBy(a, c)) => (b = c)
 
-\* A message in a cown's queue must contain the cown.
-SelfInCurrentMessage ==
-  \A c \in Cowns: (Len(queue[c]) > 0) => (c \in CurrentMessage(c))
+\* All messages in a cown's queue must contain the cown.
+SelfInQueueMessages == \A c \in Cowns: \A m \in Range(queue[c]): c \in m
 
 \* A high-priority cown is in a queue of a high-priority cown.
 HighPriorityInUnblockedQueue ==
@@ -255,7 +258,7 @@ SleepingIsNormal == \A c \in Cowns: Sleeping(c) => (priority[c] = 0)
 
 \* High-priority cowns has messages in its queue or is acquired.
 HighPriorityHasWork == \A c \in HighPriority(Cowns):
-  \/ Len(queue[c]) > 0
+  \/ ~EmptyQueue(c)
   \/ Acquired(c)
 
 \* A muted cown has only one mutor in the mute map.
