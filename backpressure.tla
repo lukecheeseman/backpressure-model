@@ -13,13 +13,6 @@ Max(s) == CHOOSE x \in s: \A y \in s \ {x}: y < x
 
 Range(f) == {f[x]: x \in DOMAIN f}
 
-Pick(s) == CHOOSE x \in s: TRUE
-
-ReduceSet(op(_, _), set, acc) ==
-  LET f[s \in SUBSET set] ==
-    IF s = {} THEN acc ELSE LET x == Pick(s) IN op(x, f[s \ {x}])
-  IN f[set]
-
 VARIABLES fuel, queue, scheduled, running, priority, blocker, mutor, mute
 vars == <<fuel, queue, scheduled, running, priority, blocker, mutor, mute>>
 
@@ -28,8 +21,6 @@ Sleeping(c) == scheduled[c] /\ (Len(queue[c]) = 0)
 Available(c) == scheduled[c] /\ (Len(queue[c]) > 0)
 
 Overloaded(c) == Len(queue[c]) > OverloadThreshold
-
-Muted(c) == c \in UNION Range(mute)
 
 CurrentMessage(c) == IF Len(queue[c]) > 0 THEN Head(queue[c]) ELSE {}
 
@@ -168,97 +159,110 @@ Spec ==
   /\ \A c \in Cowns: WF_vars(Run(c))
   /\ WF_vars(Unmute)
 
+\* Utility Functions
+
+Pick(s) == CHOOSE x \in s: TRUE
+
+ReduceSet(op(_, _), set, acc) ==
+  LET f[s \in SUBSET set] ==
+    IF s = {} THEN acc ELSE LET x == Pick(s) IN op(x, f[s \ {x}])
+  IN f[set]
+
+MutedBy(a, b) == (a \in mute[b]) /\ (priority[a] = -1)
+Muted(c) == \E k \in Cowns: MutedBy(c, k)
+
+AcquiredBy(a, b) == (a < b) /\ (a \in UNION Range(queue[b]))
+Acquired(c) == \E k \in Cowns: AcquiredBy(c, k)
+
+Required(c) == \E k \in Cowns: (k < c) /\ (c \in UNION Range(queue[k]))
+
+\* https://github.com/tlaplus/Examples/blob/master/specifications/TransitiveClosure/TransitiveClosure.tla#L114
+TC(R) ==
+  LET
+    S == {r[1]: r \in R} \cup {r[2]: r \in R}
+    RECURSIVE TCR(_)
+    TCR(T) ==
+      IF T = {} THEN R
+      ELSE
+        LET
+          r == CHOOSE s \in T: TRUE
+          RR == TCR(T \ {r})
+        IN
+          RR \cup {<<s, t>> \in S \X S: <<s, r>> \in RR /\ <<r, t>> \in RR}
+  IN
+    TCR(S)
+
+CylcicTransitiveClosure(R(_, _)) ==
+  LET s == {<<a, b>> \in Cowns \X Cowns: R(a, b)}
+  IN \E c \in Cowns: <<c, c>> \in TC(s)
+
+\* Temporal Properties
+
+\* The model does not livelock.
+Termination == <>[](\A c \in Cowns: Sleeping(c))
+
 \* Invariants
 
-\* TODO: comments
-
+\* The message limit for TLC is enforced (the model has finite state space).
 MessageLimit ==
   LET msgs == ReduceSet(LAMBDA c, sum: sum + Len(queue[c]), Cowns, 0) IN
   msgs <= (BehaviourLimit + Max(Cowns))
 
+\* The running cown is scheduled and the greatest cown in the head of its queue.
 RunningIsScheduled ==
   \A c \in Cowns: running[c] => scheduled[c] /\ (c = Max(CurrentMessage(c)))
 
+\* A cown is not its own mutor.
 CownNotMutedBySelf == \A c \in Cowns: c \notin mute[c]
 
+\* A low-priority cown is muted.
 LowPriorityMuted == \A c \in Cowns: (priority[c] = -1) => Muted(c)
 
-\* WillScheduleCown == \E c \in Cowns:
-\*   \/ scheduled[c]
-\*   \/
-\*     /\ priority[c] = -1
-\*     /\ \E k \in DOMAIN mute: (c \in mute[k]) /\ (priority[k] = 0)
-
+\* There cannot be message that has acquired a high-priority cown and has
+\* acquired, or is in the queue of, a low-priority cown.
 Nonblocking ==
   \A c \in Cowns: \A m \in Range(queue[c]):
-    ~(\E h \in HighPriority(m): \E l \in LowPriority(m): (h < c) /\ (l <= c))
+    \A <<l, h>> \in LowPriority(m) \X HighPriority(m): (c <= h) \/ (c < l)
 
+\* All cowns in a running message have no blocker.
 RunningNotBlocked ==
   \A c \in Cowns: running[c] => (\A k \in CurrentMessage(c): blocker[k] = Null)
 
-Acquired(c) == \E k \in Cowns: (k > c) /\ (c \in UNION Range(queue[k]))
+\* An unscheduled cown is either muted or acquired.
 UnscheduledByMuteOrAcquire ==
   \A c \in Cowns: ~((priority[c] = -1) \/ Acquired(c)) <=> scheduled[c]
 
+\* A cown in the queue of a greater cown is unscheduled.
 BehaviourAcquisition ==
   \A c \in Cowns: \A k \in UNION Range(queue[c]): (k < c) => ~scheduled[k]
 
-AcquiredBy(a, b) == (a < b) /\ (a \in UNION Range(queue[b]))
+\* A cown can only be acquired by at most one cown.
 AcquiredOnce ==
-  \A a \in Cowns: \A b \in Cowns: \A c \in Cowns:
+  \A <<a, b, c>> \in Cowns \X Cowns \X Cowns:
     (AcquiredBy(a, b) /\ AcquiredBy(a, c)) => (b = c)
 
+\* A message in a cown's queue must contain the cown.
 SelfInCurrentMessage ==
   \A c \in Cowns: (Len(queue[c]) > 0) => (c \in CurrentMessage(c))
 
-HighPriorityInQueue ==
-  \A c \in Cowns: (priority[c] = 1) =>
-    \E k \in Cowns: c \in UNION Range(queue[k])
+\* A high-priority cown is in a queue of a high-priority cown.
+HighPriorityInUnblockedQueue ==
+  \A c \in HighPriority(Cowns):
+    \E k \in HighPriority(Cowns): c \in UNION Range(queue[k])
 
-Required(c) == \E k \in Cowns: (k < c) /\ (c \in UNION Range(queue[k]))
-SleepingIsNormalOrRequired ==
-  \A c \in Cowns: Sleeping(c) => ((priority[c] = 0) \/ Required(c))
+\* Warning: not enforced by implementation.
+SleepingIsNormal == \A c \in Cowns: Sleeping(c) => (priority[c] = 0)
 
-HighPriorityHasWork ==
-  \A c \in Cowns: ((priority[c] = 1) => ((Len(queue[c]) > 0) \/ ~scheduled[c]))
+\* High-priority cowns has messages in its queue or is acquired.
+HighPriorityHasWork == \A c \in HighPriority(Cowns):
+  \/ Len(queue[c]) > 0
+  \/ Acquired(c)
 
-MuteSetsDisjoint ==
-  \A c \in Cowns: \A k \in Cowns:
-    ((mute[c] \intersect mute[k]) /= {}) => (c = k)
+\* A muted cown has only one mutor in the mute map.
+MuteSetsDisjoint == \A <<a, b>> \in Cowns \X Cowns:
+  ((mute[a] \intersect mute[b]) /= {}) => (a = b)
 
-\* https://github.com/tlaplus/Examples/blob/master/specifications/TransitiveClosure/TransitiveClosure.tla#L114
-\* TC(R) ==
-\*   LET
-\*     S == {r[1]: r \in R} \cup {r[2]: r \in R}
-\*     RECURSIVE TCR(_)
-\*     TCR(T) ==
-\*       IF T = {} THEN R
-\*       ELSE
-\*         LET
-\*           r == CHOOSE s \in T: TRUE
-\*           RR == TCR(T \ {r})
-\*         IN
-\*           RR \cup {<<s, t>> \in S \X S: <<s, r>> \in RR /\ <<r, t>> \in RR}
-\*   IN
-\*     TCR(S)
-
-\* CylcicTransitiveClosure(R(_, _)) ==
-\*   LET s == {<<a, b>> \in Cowns \X Cowns: R(a, b)}
-\*   IN \E c \in Cowns: <<c, c>> \in TC(s)
-
-\* MutedBy(a, b) == (a \in mute[b]) /\ (priority[a] = -1)
-\* AcyclicTCMute == ~CylcicTransitiveClosure(MutedBy)
-
-\* Obstructs(a, b) ==
-\*   \/ AcquiredBy(a, b)
-\*   \/ (~Acquired(a) /\ MutedBy(a, b))
-
-\* Foo == ~CylcicTransitiveClosure(Obstructs)
-
-\* Temporal Properties
-
-Termination == <>[](\A c \in Cowns: Sleeping(c))
-
-SomeCownWillBeScheduled == []<>(\E c \in Cowns: scheduled[c])
+\* The transitive closure of the relation MutedBy has no cycles.
+AcyclicTCMute == ~CylcicTransitiveClosure(MutedBy)
 
 ====
