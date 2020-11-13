@@ -42,7 +42,7 @@ Init ==
   /\ fuel = BehaviourLimit
   /\ queue = [c \in Cowns |-> <<{c}>>]
   /\ scheduled = {c \in Cowns : TRUE}
-  /\ running = [c \in Cowns |-> FALSE]
+  /\ running = {}
   /\ priority = [c \in Cowns |-> 0]
   /\ blocker = [c \in Cowns |-> Null]
   /\ mutor = [c \in Cowns |-> Null]
@@ -79,25 +79,25 @@ Acquire(cown) == AcquireHigh(cown) \/ AcquireNormal(cown)
 
 StartHigh(cown) ==
   cown \in scheduled
-  /\ ~running[cown]
+  /\ cown \notin running
   /\ Len(queue[cown]) /= 0
   /\ RequiresPriority(cown)
   /\ LET msg == Head(queue[cown]) IN
     /\ cown = Max(msg)
     /\ priority' = (cown :> 1) @@ priority
-    /\ running' = (cown :> TRUE) @@ running
+    /\ running' = running \union {cown}
     /\ blocker' = [c \in msg |-> Null] @@ blocker
     /\ UNCHANGED <<fuel, queue, scheduled, mutor, mute>>
 
 StartNormal(cown) ==
   cown \in scheduled
-  /\ ~running[cown]
+  /\ cown \notin running
   /\ Len(queue[cown]) /= 0
   /\ ~RequiresPriority(cown)
   /\ LET msg == Head(queue[cown]) IN
     /\ cown = Max(msg)
     /\ priority' = (cown :> 0) @@ priority
-    /\ running' = (cown :> TRUE) @@ running
+    /\ running' = running \union {cown}
     /\ blocker' = [c \in msg |-> Null] @@ blocker
     /\ UNCHANGED <<fuel, queue, scheduled, mutor, mute>>
 
@@ -105,7 +105,7 @@ Start(cown) == StartHigh(cown) \/ StartNormal(cown)
 
 SendAndMute(cown) == \* here senders can be empty
   LET senders == CurrentMessage(cown) IN
-  /\ running[cown]
+  /\ cown \in running
   /\ fuel > 0
   /\ \E receivers \in SUBSET Cowns: receivers /= {}
     /\ LET first == Min(receivers) IN
@@ -124,7 +124,7 @@ SendAndMute(cown) == \* here senders can be empty
 
 SendNoMute(cown) == \* here senders can be empty
   LET senders == CurrentMessage(cown) IN
-  /\ running[cown]
+  /\ cown \in running
   /\ fuel > 0
   /\ \E receivers \in SUBSET Cowns: receivers /= {}
     /\ LET first == Min(receivers) IN
@@ -141,7 +141,7 @@ SendNoMute(cown) == \* here senders can be empty
 
 SendNormal(cown) == \* here senders can be empty
   LET senders == CurrentMessage(cown) IN
-  /\ running[cown]
+  /\ cown \in running
   /\ fuel > 0
   /\ \E receivers \in SUBSET Cowns: receivers /= {}
     /\ LET first == Min(receivers) IN
@@ -153,7 +153,7 @@ SendNormal(cown) == \* here senders can be empty
 Send(cown) == SendAndMute(cown) \/ SendNoMute(cown) \/ SendNormal(cown)
 
 CompleteMute(cown) ==
-  running[cown]
+  cown \in running
   /\ mutor[cown] /= Null
   /\ LET msg == CurrentMessage(cown) IN
      LET muting == {c \in msg: priority[c] = 0} IN
@@ -161,12 +161,12 @@ CompleteMute(cown) ==
       /\ mute' = (mutor[cown] :> mute[mutor[cown]] \union muting) @@ mute
       /\ scheduled' = (scheduled \union msg) \ muting
   /\ queue' = (cown :> Tail(queue[cown])) @@ queue
-  /\ running' = (cown :> FALSE) @@ running
+  /\ running' = running \ {cown}
   /\ mutor' = (cown :> Null) @@ mutor
   /\ UNCHANGED <<fuel, blocker>>
 
 CompleteNormal(cown) ==
-  running[cown]
+  cown \in running
   /\ mutor[cown] = Null
   /\ LET msg == CurrentMessage(cown) IN
     /\ scheduled' = scheduled \union msg
@@ -174,7 +174,7 @@ CompleteNormal(cown) ==
                     [c \in msg \ {cown} |-> IF EmptyQueue(c) THEN 0 ELSE priority[c]] @@
                     priority
   /\ queue' = (cown :> Tail(queue[cown])) @@ queue
-  /\ running' = (cown :> FALSE) @@ running
+  /\ running' = running \ {cown}
   /\ mutor' = (cown :> Null) @@ mutor
   /\ UNCHANGED <<fuel, blocker, mute>>
 
@@ -261,7 +261,7 @@ MessageLimit ==
 
 \* The running cown is scheduled and the greatest cown in the head of its queue.
 RunningIsScheduled ==
-  \A c \in Cowns: running[c] => (c \in scheduled) /\ (c = Max(CurrentMessage(c)))
+  \A c \in running : (c \in scheduled) /\ (c = Max(CurrentMessage(c)))
 
 \* A cown is not its own mutor.
 CownNotMutedBySelf == \A c \in Cowns: c \notin mute[c]
@@ -277,7 +277,7 @@ Nonblocking ==
 
 \* All cowns in a running message have no blocker.
 RunningNotBlocked ==
-  \A c \in Cowns: running[c] => (\A k \in CurrentMessage(c): blocker[k] = Null)
+  \A c \in running : (\A k \in CurrentMessage(c): blocker[k] = Null)
 
 \* An unscheduled cown is either muted or acquired.
 UnscheduledByMuteOrAcquire ==
@@ -321,6 +321,6 @@ MutedByIsAcyclic == \A c \in Cowns: ~MutedByCycle(c)
 BlockerIsNextRequiredToRun ==
   \A c1, c2 \in Cowns: blocker[c1] = c2 <=>
     \E c3 \in Cowns: c3 > c1 /\
-    \E m \in Range(queue[c3]): ~(running[c3] /\ m = Head(queue[c3])) /\ c1 \in m /\ c2 = Min({c4 \in m: c4 > c1})
+    \E m \in Range(queue[c3]): ~(c3 \in running /\ m = Head(queue[c3])) /\ c1 \in m /\ c2 = Min({c4 \in m: c4 > c1})
 
 ====
