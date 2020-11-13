@@ -1,6 +1,6 @@
 
 NPROC ?= $(shell nproc)
-TLC_JAVA_OPTS ?= -XX:+UseParallelGC
+TLC_JAVA_OPTS ?= -XX:+UseParallelGC -Xmx1024m
 TLC_OPTS ?= -workers $(NPROC)
 	# -debug -coverage 1
 

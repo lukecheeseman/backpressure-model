@@ -30,20 +30,13 @@ LowPriority(cs) == {c \in cs: priority[c] = -1}
 
 HighPriority(cs) == {c \in cs: priority[c] = 1}
 
-RequiresPriority(c) ==
-  \/ Overloaded(c)
-  \/ \E m \in Range(queue[c]): \E k \in m \ {c}: priority[k] = 1
+RequiresPriority(c) == Overloaded(c) \/ \E m \in Range(queue[c]): \E k \in m \ {c}: priority[k] = 1
 
 RECURSIVE Blockers(_)
-Blockers(c) ==
-  IF blocker[c] = Null THEN {} ELSE {blocker[c]} \union Blockers(blocker[c])
-Prioritizing(cs) ==
-  LET unprioritized == {c \in cs: priority[c] < 1} IN
-  unprioritized \union UNION {Blockers(c): c \in unprioritized}
+Blockers(c) == IF blocker[c] = Null THEN {} ELSE {blocker[c]} \union Blockers(blocker[c])
+Prioritise(c1) == IF priority[c1] < 1 THEN {c1} \union Blockers(c1) ELSE {}
 
-ValidMutor(c) ==
-  \/ (priority[c] = 1) /\ Overloaded(c)
-  \/ (priority[c] = -1)
+Mutor(c) == ((priority[c] = 1) /\ Overloaded(c)) \/ (priority[c] = -1)
 
 Init ==
   /\ fuel = BehaviourLimit
@@ -55,90 +48,137 @@ Init ==
   /\ mutor = [c \in Cowns |-> Null]
   /\ mute = [c \in Cowns |-> {}]
 
-Terminating ==
-  \* TODO: only require empty queue
-  \* /\ \A c \in Cowns: EmptyQueue(c)
-  \* /\ Assert(\A c \in Cowns: Sleeping(c), "Termination with unscheduled cowns")
-  /\ \A c \in Cowns: Sleeping(c)
-  /\ UNCHANGED vars
-
-Acquire(cown) ==
-  LET msg == CurrentMessage(cown) IN
-  /\ Available(cown)
+AcquireHigh(cown) ==
+  scheduled[cown]
+  /\ Len(queue[cown]) /= 0
+  /\ LET msg == Head(queue[cown]) IN
   /\ cown < Max(msg)
-  /\ IF priority[cown] = 1 THEN
-      LET prioritizing == Prioritizing({Min({c \in msg: c > cown})}) IN
-      LET unmuting == LowPriority(prioritizing) IN
-      /\ priority' = [c \in prioritizing |-> 1] @@ priority
-      /\ scheduled' = (cown :> FALSE) @@ [c \in unmuting |-> TRUE] @@ scheduled
-    ELSE
-      /\ scheduled' = (cown :> FALSE) @@ scheduled
-      /\ UNCHANGED <<priority, mute>>
   /\ LET next == Min({c \in msg: c > cown}) IN
-    /\ blocker' = (cown :> next) @@ blocker
-    /\ LET q == (cown :> Tail(queue[cown])) @@ queue IN
-      queue' = (next :> Append(queue[next], msg)) @@ q
-  /\ UNCHANGED <<fuel, running, mutor, mute>>
+    /\ priority[cown] = 1
+    /\ LET prioritizing == Prioritise(Min({c \in msg: c > cown})) IN
+       LET unmuting == { c \in prioritizing : priority[c] = -1 } IN
+        /\ priority' = [c \in prioritizing |-> 1] @@ priority
+        /\ scheduled' = (cown :> FALSE) @@ [c \in unmuting |-> TRUE] @@ scheduled
+        /\ blocker' = (cown :> next) @@ blocker
+        /\ queue' = (next :> Append(queue[next], msg)) @@ (cown :> Tail(queue[cown])) @@ queue
+        /\ UNCHANGED <<fuel, running, mutor, mute>>
 
-Prerun(cown) ==
-  LET msg == CurrentMessage(cown) IN
+AcquireNormal(cown) ==
+  scheduled[cown]
+  /\ Len(queue[cown]) /= 0
+  /\ LET msg == Head(queue[cown]) IN
+  /\ cown < Max(msg)
+  /\ LET next == Min({c \in msg: c > cown}) IN
+    /\ priority[cown] /= 1
+    /\ scheduled' = (cown :> FALSE) @@ scheduled
+    /\ blocker' = (cown :> next) @@ blocker
+    /\ queue' = (next :> Append(queue[next], msg)) @@ (cown :> Tail(queue[cown])) @@ queue
+    /\ UNCHANGED <<fuel, running, priority, mutor, mute>>
+
+Acquire(cown) == AcquireHigh(cown) \/ AcquireNormal(cown)
+
+StartHigh(cown) ==
   /\ scheduled[cown]
   /\ ~running[cown]
-  /\ IF msg = {} THEN FALSE ELSE cown = Max(msg)
-  /\ priority' = (cown :> IF RequiresPriority(cown) THEN 1 ELSE 0) @@ priority
-  /\ running' = (cown :> TRUE) @@ running
-  /\ blocker' = [c \in msg |-> Null] @@ blocker
-  /\ UNCHANGED <<fuel, queue, scheduled, mutor, mute>>
+  /\ Len(queue[cown]) /= 0
+  /\ RequiresPriority(cown)
+  /\ LET msg == Head(queue[cown]) IN
+    /\ cown = Max(msg)
+    /\ priority' = (cown :> 1) @@ priority
+    /\ running' = (cown :> TRUE) @@ running
+    /\ blocker' = [c \in msg |-> Null] @@ blocker
+    /\ UNCHANGED <<fuel, queue, scheduled, mutor, mute>>
 
-Send(cown) ==
+StartNormal(cown) ==
+  /\ scheduled[cown]
+  /\ ~running[cown]
+  /\ Len(queue[cown]) /= 0
+  /\ ~RequiresPriority(cown)
+  /\ LET msg == Head(queue[cown]) IN
+    /\ cown = Max(msg)
+    /\ priority' = (cown :> 0) @@ priority
+    /\ running' = (cown :> TRUE) @@ running
+    /\ blocker' = [c \in msg |-> Null] @@ blocker
+    /\ UNCHANGED <<fuel, queue, scheduled, mutor, mute>>
+
+Start(cown) == StartHigh(cown) \/ StartNormal(cown)
+
+SendAndMute(cown) == \* here senders can be empty
   LET senders == CurrentMessage(cown) IN
   /\ running[cown]
   /\ fuel > 0
-  /\ \E receivers \in SUBSET Cowns:
-    /\ Cardinality(receivers) > 0
-    /\ queue' =
-      (Min(receivers) :> Append(queue[Min(receivers)], receivers)) @@ queue
-    \* TODO:
-    \* /\ IF \E c \in receivers: priority[c] = 1 THEN
-    /\ IF priority[Min(receivers)] = 1 THEN
-      LET prioritizing == Prioritizing({Min(receivers)}) IN
-      LET unmuting == LowPriority(prioritizing) IN
-      /\ priority' = [c \in prioritizing |-> 1] @@ priority
-      /\ scheduled' = [c \in unmuting |-> TRUE] @@ scheduled
-      /\ LET mutors == {c \in receivers \ senders: ValidMutor(c)} IN
-        IF
-          /\ mutors /= {}
-          /\ mutor[cown] = Null
-          /\ \A c \in senders: priority[c] = 0
-          /\ \A c \in senders: c \notin receivers \* TODO: justify
-        THEN
-          /\ mutor' = (cown :> Min(mutors)) @@ mutor
-        ELSE
-          /\ UNCHANGED <<mutor>>
-      ELSE
-        /\ UNCHANGED <<scheduled, priority, mutor>>
+  /\ \E receivers \in SUBSET Cowns: receivers /= {}
+    /\ LET first == Min(receivers) IN
+      priority[first] = 1
+      /\ mutor[cown] = Null 
+      /\ (\A c \in senders: priority[c] = 0)
+      /\ receivers \ senders = receivers
+      /\ \E c1 \in receivers: Mutor(c1) /\ (\A c2 \in receivers: c2 < c1 => ~Mutor(c2))
+      /\ mutor' = (cown :> c1) @@ mutor
+      /\ LET prioritizing == Prioritise(first) IN
+        scheduled' = [c \in LowPriority(prioritizing) |-> TRUE] @@ scheduled
+        /\ priority' = [c \in prioritizing |-> 1] @@ priority
+      /\ queue' = (first :> Append(queue[first], receivers)) @@ queue
   /\ fuel' = fuel - 1
   /\ UNCHANGED <<running, blocker, mute>>
 
-Complete(cown) ==
-  LET msg == CurrentMessage(cown) IN
+SendNoMute(cown) == \* here senders can be empty
+  LET senders == CurrentMessage(cown) IN
   /\ running[cown]
-  /\ IF mutor[cown] /= Null THEN
-      LET muting == {c \in msg: priority[c] = 0} IN
+  /\ fuel > 0
+  /\ \E receivers \in SUBSET Cowns: receivers /= {}
+    /\ LET first == Min(receivers) IN
+    /\ priority[first] = 1
+    /\ (mutor[cown] /= Null 
+        \/ (\E c \in senders: priority[c] /= 0 \/ c \in receivers) \* TODO: justify
+        \/ (\A c \in receivers: ~Mutor(c)))
+      /\ LET prioritizing == Prioritise(first) IN
+        scheduled' = [c \in LowPriority(prioritizing) |-> TRUE] @@ scheduled
+        /\ priority' = [c \in prioritizing |-> 1] @@ priority
+    /\ queue' = (first :> Append(queue[first], receivers)) @@ queue
+  /\ fuel' = fuel - 1
+  /\ UNCHANGED <<running, blocker, mute, mutor>>
+
+SendNormal(cown) == \* here senders can be empty
+  LET senders == CurrentMessage(cown) IN
+  /\ running[cown]
+  /\ fuel > 0
+  /\ \E receivers \in SUBSET Cowns: receivers /= {}
+    /\ LET first == Min(receivers) IN
+      priority[first] /= 1
+      /\ queue' = (first :> Append(queue[first], receivers)) @@ queue
+  /\ fuel' = fuel - 1
+  /\ UNCHANGED <<scheduled, priority, mutor, running, blocker, mute>>
+
+Send(cown) == SendAndMute(cown) \/ SendNoMute(cown) \/ SendNormal(cown)
+
+CompleteMute(cown) ==
+  running[cown]
+  /\ mutor[cown] /= Null
+  /\ LET msg == CurrentMessage(cown) IN
+     LET muting == {c \in msg: priority[c] = 0} IN
       /\ priority' = [c \in muting |-> -1] @@ priority
       /\ mute' = (mutor[cown] :> mute[mutor[cown]] \union muting) @@ mute
       /\ scheduled' = [c \in msg |-> c \notin muting] @@ scheduled
-    ELSE
-      /\ scheduled' = [c \in msg |-> TRUE] @@ scheduled
-      /\ priority' =
-        (cown :> IF Len(queue[cown]) = 1 THEN 0 ELSE priority[cown]) @@
-        [c \in msg \ {cown} |-> IF EmptyQueue(c) THEN 0 ELSE priority[c]] @@
-        priority
-      /\ UNCHANGED <<mute>>
   /\ queue' = (cown :> Tail(queue[cown])) @@ queue
   /\ running' = (cown :> FALSE) @@ running
   /\ mutor' = (cown :> Null) @@ mutor
   /\ UNCHANGED <<fuel, blocker>>
+
+CompleteNormal(cown) ==
+  running[cown]
+  /\ mutor[cown] = Null
+  /\ LET msg == CurrentMessage(cown) IN
+    /\ scheduled' = [c \in msg |-> TRUE] @@ scheduled
+    /\ priority' = (cown :> IF Len(queue[cown]) = 1 THEN 0 ELSE priority[cown]) @@
+                    [c \in msg \ {cown} |-> IF EmptyQueue(c) THEN 0 ELSE priority[c]] @@
+                    priority
+  /\ queue' = (cown :> Tail(queue[cown])) @@ queue
+  /\ running' = (cown :> FALSE) @@ running
+  /\ mutor' = (cown :> Null) @@ mutor
+  /\ UNCHANGED <<fuel, blocker, mute>>
+
+Complete(cown) == CompleteMute(cown) \/ CompleteNormal(cown)
 
 Unmute ==
   LET invalid_keys == {c \in DOMAIN mute: priority[c] = 0} IN
@@ -151,15 +191,22 @@ Unmute ==
 
 Run(cown) ==
   \/ Acquire(cown)
-  \/ Prerun(cown)
+  \/ Start(cown)
   \/ Send(cown)
   \/ Complete(cown)
 
-Next == Terminating \/ \E c \in Cowns: Run(c) \/ Unmute
+Terminating ==
+  \* TODO: only require empty queue
+  \* /\ \A c \in Cowns: EmptyQueue(c)
+  \* /\ Assert(\A c \in Cowns: Sleeping(c), "Termination with unscheduled cowns")
+  /\ \A c \in Cowns: Sleeping(c)
+  /\ UNCHANGED vars
+
+Next == \E c \in Cowns: Run(c) \/ Unmute
 
 Spec ==
   /\ Init
-  /\ [][Next]_vars
+  /\ [][Next \/ Terminating]_vars
   /\ \A c \in Cowns: WF_vars(Run(c))
   /\ WF_vars(Unmute)
 
@@ -265,7 +312,15 @@ HighPriorityHasWork == \A c \in HighPriority(Cowns):
 MuteSetsDisjoint == \A <<a, b>> \in Cowns \X Cowns:
   ((mute[a] \intersect mute[b]) /= {}) => (a = b)
 
+MutedByCycle(c1) == LET s == {<<a, b>> \in Cowns \X Cowns: MutedBy(a, b)} IN
+                      \E c2 \in Cowns: <<c1, c2>> \in TC(s) /\ <<c2, c2>> \in TC(s)
+
 \* The transitive closure of the relation MutedBy has no cycles.
-AcyclicTCMute == ~CylcicTransitiveClosure(MutedBy)
+MutedByIsAcyclic == \A c \in Cowns: ~MutedByCycle(c)
+
+BlockerIsNextRequiredToRun ==
+  \A c1, c2 \in Cowns: blocker[c1] = c2 <=>
+    \E c3 \in Cowns: c3 > c1 /\
+    \E m \in Range(queue[c3]): ~(running[c3] /\ m = Head(queue[c3])) /\ c1 \in m /\ c2 = Min({c4 \in m: c4 > c1})
 
 ====
