@@ -83,11 +83,11 @@ StartHigh(cown) ==
   /\ Len(queue[cown]) /= 0
   /\ RequiresPriority(cown)
   /\ LET msg == Head(queue[cown]) IN
-    /\ cown = Max(msg)
-    /\ priority' = (cown :> 1) @@ priority
-    /\ running' = running \union {cown}
-    /\ blocker' = [c \in msg |-> Null] @@ blocker
-    /\ UNCHANGED <<fuel, queue, scheduled, mutor, mute>>
+  /\ cown = Max(msg)
+  /\ priority' = (cown :> 1) @@ priority
+  /\ running' = running \union {cown}
+  /\ blocker' = [c \in msg |-> Null] @@ blocker
+  /\ UNCHANGED <<fuel, queue, scheduled, mutor, mute>>
 
 StartNormal(cown) ==
   cown \in scheduled
@@ -95,14 +95,15 @@ StartNormal(cown) ==
   /\ Len(queue[cown]) /= 0
   /\ ~RequiresPriority(cown)
   /\ LET msg == Head(queue[cown]) IN
-    /\ cown = Max(msg)
-    /\ priority' = (cown :> 0) @@ priority
-    /\ running' = running \union {cown}
-    /\ blocker' = [c \in msg |-> Null] @@ blocker
-    /\ UNCHANGED <<fuel, queue, scheduled, mutor, mute>>
+  /\ cown = Max(msg)
+  /\ priority' = (cown :> 0) @@ priority
+  /\ running' = running \union {cown}
+  /\ blocker' = [c \in msg |-> Null] @@ blocker
+  /\ UNCHANGED <<fuel, queue, scheduled, mutor, mute>>
 
 Start(cown) == StartHigh(cown) \/ StartNormal(cown)
 
+(*
 SendAndMute(cown) == \* here senders can be empty
   LET senders == CurrentMessage(cown) IN
   /\ cown \in running
@@ -151,6 +152,32 @@ SendNormal(cown) == \* here senders can be empty
   /\ UNCHANGED <<scheduled, priority, mutor, running, blocker, mute>>
 
 Send(cown) == SendAndMute(cown) \/ SendNoMute(cown) \/ SendNormal(cown)
+*)
+
+Send(cown) ==
+  LET senders == CurrentMessage(cown) IN
+  /\ cown \in running
+  /\ fuel > 0
+  /\ \E receivers \in SUBSET Cowns:
+    /\ Cardinality(receivers) > 0
+    /\ queue' = (Min(receivers) :> Append(queue[Min(receivers)], receivers)) @@ queue
+    /\ IF priority[Min(receivers)] = 1 THEN
+        LET prioritizing == Prioritise(Min(receivers)) IN
+        LET unmuting == LowPriority(prioritizing) IN
+        /\ priority' = [c \in prioritizing |-> 1] @@ priority
+        /\ scheduled' = scheduled \union unmuting
+       ELSE 
+        /\ UNCHANGED <<scheduled, priority>>
+    /\ LET mutors == {c \in receivers \ senders: Mutor(c)} IN
+        IF mutors /= {} /\ mutor[cown] = Null
+          /\ (\A c \in senders: priority[c] = 0)
+          /\ (\A c \in senders: c \notin receivers) \* TODO: justify
+        THEN
+          /\ mutor' = (cown :> Min(mutors)) @@ mutor
+        ELSE
+          /\ UNCHANGED <<mutor>>
+  /\ fuel' = fuel - 1
+  /\ UNCHANGED <<running, blocker, mute>>
 
 CompleteMute(cown) ==
   cown \in running
@@ -320,7 +347,13 @@ MutedByIsAcyclic == \A c \in Cowns: ~MutedByCycle(c)
 
 BlockerIsNextRequiredToRun ==
   \A c1, c2 \in Cowns: blocker[c1] = c2 <=>
-    \E c3 \in Cowns: c3 > c1 /\
-    \E m \in Range(queue[c3]): ~(c3 \in running /\ m = Head(queue[c3])) /\ c1 \in m /\ c2 = Min({c4 \in m: c4 > c1})
+    \E c3 \in Cowns: c1 < c3 /\ \E m \in Range(queue[c3]): c1 \in m 
+      /\ ~(c3 \in running /\ m = Head(queue[c3])) /\ c2 = Min({c4 \in m: c4 > c1})
 
+ValidCownsInMessage ==
+  \A c1 \in Cowns: \A m \in Range(queue[c1]): c1 <= Max(m)
+
+Obstacle(a, b) == AcquiredBy(a, b) \/ (MutedBy(a, b) /\ Mutor(b))
+
+AcyclicTCObstacle == ~CylcicTransitiveClosure(Obstacle)
 ====
